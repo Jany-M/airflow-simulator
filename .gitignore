@@ -1,0 +1,6 @@
+node_modules/
+dist/
+test/shots/
+test/.tmp*/
+*.local
+/_to_delete
