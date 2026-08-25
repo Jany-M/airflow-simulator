@@ -12,7 +12,7 @@ Static app — no backend. Plans autosave to `localStorage` and export/import as
 
 ## Features
 
-- **Floor-plan editor** — grid rooms (1 cell = 0.5 m, plan 28×18 m), windows/doors on any wall, scale bar, W×L metre inputs, sample plan, erase/rename. On mobile: frames the building tightly; pinch to zoom, two-finger pan (Ctrl/Cmd+0 resets; mouse wheel zooms).
+- **Floor-plan editor** — grid rooms (1 cell = 0.5 m, plan 28×18 m), windows/doors on any wall, scale bar, W×L metre inputs, sample plan, erase/rename. Canvas frames and centers the building with minimal padding (scales with the window); on mobile also pinch-zoom / two-finger pan (Ctrl/Cmd+0 resets; mouse wheel zooms).
 - **Select & edit** — click room to select (yellow); drag interior to move, drag wall to resize. Click opening to open (**green**) / close (**red**); hold ~0.2 s to select (yellow ring) and drag along walls.
 - **Live airflow** — pressure-network solver + wind particles; dead zones tinted red.
 - **Best configuration** — searches open/closed sets to maximize ventilated floor area.

@@ -15,8 +15,8 @@ import {
 interface DragRect { x0: number; y0: number; x1: number; y1: number }
 interface OpeningPreview { orient: Orient; x: number; y: number; len: number; valid: boolean }
 
-/** Extra pad so the top scale bar HUD does not sit on the plan. */
-const EDITOR_PAD = 0.09;
+/** Extra pad hint — editorTransform clamps this tightly so the plan fills the canvas. */
+const EDITOR_PAD = 0.02;
 /** World-cell distance before a press becomes a drag (select stays a click under this). */
 const DRAG_THRESH = 0.35;
 /** Hold this long on an opening to select it (yellow ring) and allow dragging. */
@@ -225,18 +225,21 @@ export default function EditorCanvas() {
       // Climate always evolves while the sim runs, whatever the view.
       if (f && simRunning) climateRef.current.step(dt, plan.env);
 
+      drawRooms(ctx, t, plan, selectedId);
+      // Heatmaps over floors so dynamic temp / RH / airflow colours stay readable.
       if (f && simRunning) {
         if (viewMode === 'flow') drawFlowHeatmap(ctx, t, f, plan.wind.speed);
         else drawClimateHeatmap(ctx, t, f, climateRef.current, viewMode, plan);
       }
-      drawRooms(ctx, t, plan, selectedId);
       drawOpenings(ctx, t, plan, selectedId);
       drawWind(ctx, t, plan, cw, ch);
 
       if (f && simRunning) {
         particlesRef.current.step(dt);
         drawParticles(ctx, t, particlesRef.current.particles, f.maxSpeed);
-        if (viewMode !== 'flow') {
+        if (viewMode === 'flow') {
+          drawClimateLegend(ctx, cw, ch, 'flow', plan);
+        } else {
           drawRoomClimate(ctx, t, plan, climateRef.current, viewMode);
           drawClimateLegend(ctx, cw, ch, viewMode, plan);
         }

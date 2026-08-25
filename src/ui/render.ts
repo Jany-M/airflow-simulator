@@ -31,12 +31,12 @@ export function fitTransform(cw: number, ch: number, pad = 0.05): Transform {
 }
 
 /**
- * Editor transform: fit the grid (or, on narrow screens, the building bounds) into
- * the canvas, then apply zoom/pan. Drawing and hit-testing must share this helper
- * so room locations stay correct when the canvas resizes.
+ * Editor transform: frame the building (or full grid if empty), center it in the
+ * canvas with minimal padding, then apply zoom/pan. Drawing and hit-testing must
+ * share this helper so room locations stay correct when the canvas resizes.
  *
- * Mobile: frame the rooms tightly and center the result in the full canvas
- * (horizontal + vertical) with almost no empty chrome.
+ * Padding is kept tiny so free space is spent on the floorplan; once the plan
+ * meets the window edges it scales proportionally with `min(cw/bw, ch/bh)`.
  */
 export function editorTransform(
   cw: number,
@@ -48,9 +48,7 @@ export function editorTransform(
   const { x0, y0, x1, y1 } = editorFrameBounds(cw, plan);
   const bw = Math.max(1, x1 - x0);
   const bh = Math.max(1, y1 - y0);
-  const mobile = isMobileCanvas(cw);
-  // Mobile: ~1.5% pad only — desktop keeps room for the top scale-bar HUD.
-  const effectivePad = mobile ? 0.015 : pad;
+  const effectivePad = editorChromePad(cw, pad);
   const baseS = Math.min(cw / bw, ch / bh) * (1 - effectivePad);
   const s = baseS * view.zoom;
   // Explicitly center the framed rect in the canvas, then apply user pan.
@@ -61,10 +59,17 @@ export function editorTransform(
   };
 }
 
-/** World-space rectangle the editor frames at zoom=1 (full grid, or content on mobile). */
+/** Fractional pad — prefer cutting chrome so the plan fills and stays centered. */
+export function editorChromePad(cw: number, pad = 0.09): number {
+  if (isMobileCanvas(cw)) return 0.015;
+  // Desktop: keep a whisker for the scale-bar / compass, not a wide empty belt.
+  return Math.min(pad, 0.02);
+}
+
+/** World-space rectangle the editor frames at zoom=1. */
 export function editorFrameBounds(cw: number, plan?: Plan | null): { x0: number; y0: number; x1: number; y1: number } {
   const full = { x0: 0, y0: 0, x1: GRID_W, y1: GRID_H };
-  if (!isMobileCanvas(cw) || !plan?.rooms.length) return full;
+  if (!plan?.rooms.length) return full;
   let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
   for (const r of plan.rooms) {
     x0 = Math.min(x0, r.x);
@@ -72,8 +77,8 @@ export function editorFrameBounds(cw: number, plan?: Plan | null): { x0: number;
     x1 = Math.max(x1, r.x + r.w);
     y1 = Math.max(y1, r.y + r.h);
   }
-  // One cell of breathing room — enough for wall strokes, not empty girdle.
-  const margin = 1;
+  // Breathing room for wall strokes + preferred wind-arrow gap (drawWind shrinks further if needed).
+  const margin = isMobileCanvas(cw) ? 2 : 3;
   return {
     x0: Math.max(0, x0 - margin),
     y0: Math.max(0, y0 - margin),
@@ -87,8 +92,7 @@ export function editorBaseScale(cw: number, ch: number, pad = 0.09, plan?: Plan 
   const { x0, y0, x1, y1 } = editorFrameBounds(cw, plan);
   const bw = Math.max(1, x1 - x0);
   const bh = Math.max(1, y1 - y0);
-  const effectivePad = isMobileCanvas(cw) ? 0.015 : pad;
-  return Math.min(cw / bw, ch / bh) * (1 - effectivePad);
+  return Math.min(cw / bw, ch / bh) * (1 - editorChromePad(cw, pad));
 }
 
 export const wx = (t: Transform, x: number) => t.ox + x * t.s;
@@ -117,16 +121,11 @@ export const COL = {
 };
 
 export function speedColor(sp: number, max: number): string {
-  const t = max > 0 ? Math.min(sp / (max * 0.7), 1) : 0;
-  // deep blue (still) → teal → bright cyan-green (fast)
-  const r = Math.round(20 + 30 * t);
-  const g = Math.round(60 + 150 * t);
-  const b = Math.round(110 + 120 * t);
-  const a = 0.10 + 0.28 * t;
-  return `rgba(${r},${g},${b},${a})`;
+  const t = max > 0 ? Math.min(sp / (max * 0.75), 1) : 0;
+  return flowColor(t, 0.10 + 0.16 * t);
 }
 
-// ── Climate colormaps ──────────────────────────────────────────────────────
+// ── Climate / airflow colormaps ────────────────────────────────────────────
 
 type Stop = [number, number, number];
 function lerpStops(stops: Stop[], t: number): Stop {
@@ -140,6 +139,13 @@ function lerpStops(stops: Stop[], t: number): Stop {
   ];
 }
 
+/** Less airflow (red) → more airflow (blue). */
+const FLOW_STOPS: Stop[] = [
+  [210, 55, 70],   // stagnant red
+  [230, 120, 70],  // weak warm
+  [70, 170, 210],  // moderate cyan
+  [45, 110, 235],  // strong blue
+];
 const TEMP_STOPS: Stop[] = [
   [43, 96, 222],   // cold blue
   [58, 186, 214],  // cyan
@@ -155,6 +161,10 @@ const RH_STOPS: Stop[] = [
   [46, 100, 210],  // very humid deep blue
 ];
 
+export function flowColor(t: number, alpha = 0.95): string {
+  const [r, g, b] = lerpStops(FLOW_STOPS, Math.min(Math.max(t, 0), 1));
+  return `rgba(${r | 0},${g | 0},${b | 0},${alpha})`;
+}
 export function tempColor(v: number, lo: number, hi: number, alpha = 0.42): string {
   const [r, g, b] = lerpStops(TEMP_STOPS, (v - lo) / Math.max(hi - lo, 0.01));
   return `rgba(${r | 0},${g | 0},${b | 0},${alpha})`;
@@ -180,9 +190,10 @@ export function drawClimateHeatmap(
     for (let x = 0; x < f.nx; x++) {
       const i = y * f.nx + x;
       if (!f.inside[i]) continue;
+      // Drawn above room floors — keep translucent so names / sizes stay readable.
       ctx.fillStyle = mode === 'temp'
-        ? tempColor(climate.T[i], lo, hi)
-        : rhColor(climate.RH[i]);
+        ? tempColor(climate.T[i], lo, hi, 0.20)
+        : rhColor(climate.RH[i], 0.20);
       ctx.fillRect(wx(t, x), wy(t, y), t.s + 0.5, t.s + 0.5);
     }
   }
@@ -226,16 +237,17 @@ function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: numbe
   ctx.closePath();
 }
 
-/** Gradient legend bar (bottom-left) for the climate views. */
+/** Gradient legend bar (bottom-left) for airflow / climate views. */
 export function drawClimateLegend(
-  ctx: CanvasRenderingContext2D, cw: number, ch: number, mode: 'temp' | 'rh', plan: Plan,
+  ctx: CanvasRenderingContext2D, cw: number, ch: number, mode: 'flow' | 'temp' | 'rh', plan: Plan,
 ) {
   const mobile = isMobileCanvas(cw);
   const s = mobile ? 0.82 : 1;
   const W = 180 * s, H = 12 * s, x = 18 * s, y = ch - 40 * s;
   for (let i = 0; i < W; i++) {
     const f = i / (W - 1);
-    if (mode === 'temp') {
+    if (mode === 'flow') ctx.fillStyle = flowColor(f, 0.95);
+    else if (mode === 'temp') {
       const { lo, hi } = tempRange(plan);
       ctx.fillStyle = tempColor(lo + f * (hi - lo), lo, hi, 0.95);
     } else {
@@ -250,12 +262,20 @@ export function drawClimateLegend(
   ctx.font = `500 ${12 * s}px 'Segoe UI', system-ui, sans-serif`;
   ctx.textBaseline = 'top';
   ctx.textAlign = 'left';
-  const { lo, hi } = tempRange(plan);
-  ctx.fillText(mode === 'temp' ? `${lo.toFixed(0)}°C` : '0%', x, y + H + 4 * s);
-  ctx.textAlign = 'right';
-  ctx.fillText(mode === 'temp' ? `${hi.toFixed(0)}°C` : '100%', x + W, y + H + 4 * s);
-  ctx.textAlign = 'center';
-  ctx.fillText(mode === 'temp' ? 'room temperature' : 'relative humidity', x + W / 2, y - 18 * s);
+  if (mode === 'flow') {
+    ctx.fillText('less', x, y + H + 4 * s);
+    ctx.textAlign = 'right';
+    ctx.fillText('more', x + W, y + H + 4 * s);
+    ctx.textAlign = 'center';
+    ctx.fillText('airflow', x + W / 2, y - 18 * s);
+  } else {
+    const { lo, hi } = tempRange(plan);
+    ctx.fillText(mode === 'temp' ? `${lo.toFixed(0)}°C` : '0%', x, y + H + 4 * s);
+    ctx.textAlign = 'right';
+    ctx.fillText(mode === 'temp' ? `${hi.toFixed(0)}°C` : '100%', x + W, y + H + 4 * s);
+    ctx.textAlign = 'center';
+    ctx.fillText(mode === 'temp' ? 'room temperature' : 'relative humidity', x + W / 2, y - 18 * s);
+  }
 }
 
 export function drawGrid(ctx: CanvasRenderingContext2D, t: Transform) {
@@ -330,12 +350,16 @@ export function drawScaleBar(ctx: CanvasRenderingContext2D, t: Transform, cw: nu
 
 export function drawFlowHeatmap(ctx: CanvasRenderingContext2D, t: Transform, f: FlowField, windSpeed: number) {
   const threshold = DEAD_ZONE_SPEED * Math.max(windSpeed, 0.5);
+  // Normalize against a floor so weak-but-varying rooms still span red→blue.
+  const max = Math.max(f.maxSpeed, threshold * 3, 1e-6);
   for (let y = 0; y < f.ny; y++) {
     for (let x = 0; x < f.nx; x++) {
       const i = y * f.nx + x;
       if (!f.inside[i]) continue;
       const sp = f.speed[i];
-      ctx.fillStyle = sp < threshold ? COL.deadZone : speedColor(sp, f.maxSpeed);
+      // Continuous scale (dead zones sit at the red end instead of a flat wash).
+      const u = Math.min(sp / (max * 0.75), 1);
+      ctx.fillStyle = flowColor(u, 0.10 + 0.16 * u);
       ctx.fillRect(wx(t, x), wy(t, y), t.s + 0.5, t.s + 0.5);
     }
   }
@@ -658,8 +682,11 @@ export function drawWind(ctx: CanvasRenderingContext2D, t: Transform, plan: Plan
     if (Number.isFinite(hit) && hit > 0) buildExt = hit;
   }
 
-  const preferredGap = mobile ? 0.65 : 3.5;
-  const minGap = mobile ? 0.45 : 0.8; // stay clear of walls — never cover the plan
+  // Prefer a clear gap from the floorplan; shrink smoothly as the canvas gets tighter.
+  const sizeFactor = Math.min(1, Math.min(cw, ch) / (mobile ? 480 : 720));
+  const maxGap = mobile ? 2.2 : 5.5;
+  const minGap = mobile ? 0.55 : 1.15; // stay clear of walls — never cover the plan
+  const preferredGap = minGap + (maxGap - minGap) * sizeFactor;
   let spacing = mobile ? 2.0 : 4;
   let fan = mobile ? 2 : 3;
   let len = mobile ? 1.5 : 2.4;
@@ -694,7 +721,7 @@ export function drawWind(ctx: CanvasRenderingContext2D, t: Transform, plan: Plan
   // Shrink standoff toward the plan until the fan fits on-screen (desktop resize / narrow canvas).
   if (!arrowFits(standoff, fan, spacing, len)) {
     let fitted = false;
-    for (let s = standoff; s >= minStandoff; s -= 0.12) {
+    for (let s = standoff; s >= minStandoff; s -= 0.1) {
       if (arrowFits(s, fan, spacing, len)) {
         standoff = s;
         fitted = true;
@@ -725,35 +752,54 @@ export function drawWind(ctx: CanvasRenderingContext2D, t: Transform, plan: Plan
   }
   ctx.restore();
 
-  // Compass rose, top-right — arrow inside ring, cardinals drawn last so they stay readable
-  const R = Math.min(cw, ch) * (mobile ? 0.048 : 0.055);
+  // Compass rose, top-right — match sidebar WindDial proportions (thick shaft + clear tip)
+  const R = Math.min(cw, ch) * (mobile ? 0.052 : 0.06);
   const px = cw - R - (mobile ? 10 : 16);
   const py = R + (mobile ? 12 : 16);
   ctx.save();
   ctx.fillStyle = 'rgba(16,20,26,0.88)';
   ctx.beginPath(); ctx.arc(px, py, R + 8, 0, Math.PI * 2); ctx.fill();
-  ctx.strokeStyle = 'rgba(55,208,255,0.35)'; ctx.lineWidth = 1;
+  ctx.strokeStyle = 'rgba(150,175,205,0.35)'; ctx.lineWidth = 1;
   ctx.beginPath(); ctx.arc(px, py, R, 0, Math.PI * 2); ctx.stroke();
 
-  // Short cyan arrow so tips stay clear of N/E/S/W labels
+  // Wind comes FROM −wv; tip points in travel direction (+wv).
+  const fromX = px - wv.x * R * 0.48;
+  const fromY = py - wv.y * R * 0.48;
+  const tipX = px + wv.x * R * 0.48;
+  const tipY = py + wv.y * R * 0.48;
+  const shaftX = px + wv.x * R * 0.32;
+  const shaftY = py + wv.y * R * 0.32;
+  const headBase = R * 0.30;   // along travel, base of triangle
+  const headHalfW = R * 0.075; // half-width of triangle
+
   ctx.strokeStyle = cyan;
   ctx.fillStyle = cyan;
-  ctx.lineWidth = Math.max(2, R * 0.12);
+  ctx.lineWidth = Math.max(1.5, R * 0.07);
   ctx.lineCap = 'round';
-  const half = R * 0.38;
-  arrow(ctx, px - wv.x * half, py - wv.y * half, px + wv.x * half, py + wv.y * half, R * 0.22);
+  ctx.beginPath();
+  ctx.moveTo(fromX, fromY);
+  ctx.lineTo(shaftX, shaftY);
+  ctx.stroke();
+
+  // Arrowhead polygon (tip at travel end)
+  ctx.beginPath();
+  ctx.moveTo(tipX, tipY);
+  ctx.lineTo(px + wv.x * headBase - perpX * headHalfW, py + wv.y * headBase - perpY * headHalfW);
+  ctx.lineTo(px + wv.x * headBase + perpX * headHalfW, py + wv.y * headBase + perpY * headHalfW);
+  ctx.closePath();
+  ctx.fill();
 
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   ctx.fillStyle = 'rgba(223,232,245,0.95)';
-  ctx.font = `600 ${R * 0.38}px 'Segoe UI', sans-serif`;
+  ctx.font = `600 ${R * 0.36}px 'Segoe UI', sans-serif`;
   ctx.fillText('N', px, py - R * 0.78);
-  ctx.font = `400 ${R * 0.3}px 'Segoe UI', sans-serif`;
+  ctx.font = `400 ${R * 0.28}px 'Segoe UI', sans-serif`;
   ctx.fillStyle = 'rgba(160,180,205,0.75)';
   ctx.fillText('S', px, py + R * 0.78);
   ctx.fillText('E', px + R * 0.78, py);
   ctx.fillText('W', px - R * 0.78, py);
 
-  ctx.font = `500 ${R * 0.34}px 'Segoe UI', sans-serif`;
+  ctx.font = `500 ${R * 0.32}px 'Segoe UI', sans-serif`;
   ctx.fillStyle = 'rgba(200,225,245,0.9)';
   ctx.fillText(`${plan.wind.speed.toFixed(1)} m/s`, px, py + R + (mobile ? 16 : 20));
   ctx.restore();
@@ -761,12 +807,24 @@ export function drawWind(ctx: CanvasRenderingContext2D, t: Transform, plan: Plan
 
 export function arrow(ctx: CanvasRenderingContext2D, x1: number, y1: number, x2: number, y2: number, head: number) {
   const a = Math.atan2(y2 - y1, x2 - x1);
-  ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+  // Stop the shaft at the head base so the tip sits exactly on (x2, y2),
+  // not inset along the stroke (round caps were making it look ~¾ along the line).
+  const back = head * 0.82;
+  const bx = x2 - Math.cos(a) * back;
+  const by = y2 - Math.sin(a) * back;
+  ctx.save();
+  ctx.lineCap = 'butt';
+  ctx.beginPath();
+  ctx.moveTo(x1, y1);
+  ctx.lineTo(bx, by);
+  ctx.stroke();
+  ctx.restore();
   ctx.beginPath();
   ctx.moveTo(x2, y2);
-  ctx.lineTo(x2 - head * Math.cos(a - 0.45), y2 - head * Math.sin(a - 0.45));
-  ctx.lineTo(x2 - head * Math.cos(a + 0.45), y2 - head * Math.sin(a + 0.45));
-  ctx.closePath(); ctx.fill();
+  ctx.lineTo(x2 - head * Math.cos(a - 0.42), y2 - head * Math.sin(a - 0.42));
+  ctx.lineTo(x2 - head * Math.cos(a + 0.42), y2 - head * Math.sin(a + 0.42));
+  ctx.closePath();
+  ctx.fill();
 }
 
 export function drawParticles(ctx: CanvasRenderingContext2D, t: Transform, particles: Particle[], maxSpeed: number) {
