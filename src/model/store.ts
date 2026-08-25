@@ -211,7 +211,11 @@ export const useApp = create<AppState>((set, get) => {
     deleteOpening: id => mut(p => ({ ...p, openings: p.openings.filter(o => o.id !== id) })),
     applyOpenSet: openIds => {
       const s = new Set(openIds);
-      mut(p => ({ ...p, openings: p.openings.map(o => ({ ...o, open: s.has(o.id) })) }));
+      // Locked openings keep their state; only free openings are rewritten.
+      mut(p => ({
+        ...p,
+        openings: p.openings.map(o => o.locked ? o : { ...o, open: s.has(o.id) }),
+      }));
     },
 
     setSimRunning: r => set({ simRunning: r }),

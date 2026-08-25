@@ -341,12 +341,23 @@ export interface Score {
   coverage: number;   // fraction of interior cells above threshold
   meanSpeed: number;
   totalFlow: number;  // total inflow
+  /** Mean of per-room coverage (0..1). */
+  roomBalance: number;
+  /** Fraction of rooms that receive meaningful airflow (through-flow goal). */
+  roomsReached: number;
 }
 
 /** Threshold below which a cell counts as a "dead zone" (fraction of a good breeze). */
 export const DEAD_ZONE_SPEED = 0.08;
 
-export function scoreField(f: FlowField, windSpeed: number): Score {
+/** A room counts as "reached" once this fraction of its floor is above the dead-zone threshold. */
+const ROOM_REACHED_COV = 0.12;
+
+export function scoreField(
+  f: FlowField,
+  windSpeed: number,
+  rooms?: Array<{ x: number; y: number; w: number; h: number }>,
+): Score {
   const threshold = DEAD_ZONE_SPEED * Math.max(windSpeed, 0.5);
   let vent = 0, sum = 0;
   for (let i = 0; i < f.speed.length; i++) {
@@ -358,10 +369,58 @@ export function scoreField(f: FlowField, windSpeed: number): Score {
   const meanSpeed = f.interiorCount ? sum / f.interiorCount : 0;
   let totalFlow = 0;
   f.openingFlux.forEach(fl => { if (fl > 0) totalFlow += fl; });
-  // Coverage dominates; mean speed and throughflow break ties. A small
-  // per-opening penalty stops the optimizer opening windows that add nothing
-  // (e.g. a lone window into an unconnected room).
-  const score = coverage * 100 + Math.min(meanSpeed * 10, 15) + Math.min(totalFlow, 10)
-    - 0.2 * f.openingFlux.size;
-  return { score, coverage, meanSpeed, totalFlow };
+
+  // Per-room stats — optimise for flow *through* the plan, not one strong room.
+  let roomBalance = coverage;
+  let roomsReached = coverage > 0 ? 1 : 0;
+  let minRoomCov = coverage;
+  if (rooms && rooms.length > 0) {
+    let acc = 0, counted = 0, reached = 0;
+    minRoomCov = 1;
+    for (const r of rooms) {
+      let n = 0, v = 0;
+      for (let y = r.y; y < r.y + r.h; y++) {
+        for (let x = r.x; x < r.x + r.w; x++) {
+          if (x < 0 || y < 0 || x >= f.nx || y >= f.ny) continue;
+          const i = y * f.nx + x;
+          if (!f.inside[i]) continue;
+          n++;
+          if (f.speed[i] >= threshold) v++;
+        }
+      }
+      if (n <= 0) continue;
+      const cov = v / n;
+      acc += cov;
+      counted++;
+      if (cov < minRoomCov) minRoomCov = cov;
+      if (cov >= ROOM_REACHED_COV) reached++;
+    }
+    if (counted > 0) {
+      roomBalance = acc / counted;
+      roomsReached = reached / counted;
+    } else {
+      minRoomCov = 0;
+      roomBalance = 0;
+      roomsReached = 0;
+    }
+  }
+
+  // Prefer configs that push air through as many rooms as possible:
+  //  1) roomsReached — most rooms get a usable breeze
+  //  2) roomBalance  — equal per-room coverage (not one big room)
+  //  3) minRoomCov   — lift the worst room (reduce dead rooms)
+  //  4) coverage     — overall floor area still matters, lightly
+  // Mean speed / throughflow only break ties. Penalise "hot corridor" setups
+  // where mean speed is high but few rooms are reached.
+  const concentration = Math.max(0, Math.min(meanSpeed * 2, 1) - roomsReached);
+  const score =
+    roomsReached * 50
+    + roomBalance * 22
+    + minRoomCov * 18
+    + coverage * 10
+    + Math.min(meanSpeed * 5, 8)
+    + Math.min(totalFlow, 6)
+    - 0.2 * f.openingFlux.size
+    - concentration * 20;
+  return { score, coverage, meanSpeed, totalFlow, roomBalance, roomsReached };
 }

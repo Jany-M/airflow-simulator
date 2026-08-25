@@ -179,7 +179,7 @@ export default function EditorCanvas() {
       fieldRef.current = f;
       particlesRef.current.setField(f);
       climateRef.current.setField(f, useApp.getState().plan.env);
-      const s = scoreField(f, useApp.getState().plan.wind.speed);
+      const s = scoreField(f, useApp.getState().plan.wind.speed, useApp.getState().plan.rooms);
       useApp.getState().setScoreLabel(
         `Ventilated area: ${(s.coverage * 100).toFixed(0)}%  ·  mean airflow ${(s.meanSpeed).toFixed(2)}  ·  solve ${(performance.now() - t0).toFixed(0)} ms`,
       );

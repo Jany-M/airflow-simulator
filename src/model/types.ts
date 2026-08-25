@@ -73,6 +73,8 @@ export interface OptimizerResult {
   score: number;
   coverage: number; // 0..1 fraction of floor area well ventilated
   meanSpeed: number;
+  /** 0..1 fraction of rooms that receive meaningful airflow */
+  roomsReached?: number;
 }
 
 export const uid = () => Math.random().toString(36).slice(2, 10);

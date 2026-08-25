@@ -18,7 +18,7 @@ export function exportPNG(plan: Plan) {
 
   // High-quality solve for the export.
   const field = solve(plan, { iterations: 900 });
-  const s = scoreField(field, plan.wind.speed);
+  const s = scoreField(field, plan.wind.speed, plan.rooms);
 
   ctx.fillStyle = COL.bg;
   ctx.fillRect(0, 0, W, H);

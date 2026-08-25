@@ -121,7 +121,10 @@ export default function Sidebar() {
       );
       if (best) {
         useApp.getState().applyOpenSet(best.openIds);
-        setOptResultMsg(`Best found: ${best.openIds.length} opening(s) open → ${(best.coverage * 100).toFixed(0)}% of floor area ventilated. Applied ✓`);
+        const roomsPct = best.roomsReached != null
+          ? ` · ${(best.roomsReached * 100).toFixed(0)}% of rooms reached`
+          : '';
+        setOptResultMsg(`Best distributed flow: ${best.openIds.length} opening(s) open → ${(best.coverage * 100).toFixed(0)}% floor ventilated${roomsPct}. Applied ✓`);
       } else {
         setOptResultMsg('No configuration found — add some openings.');
       }
@@ -212,6 +215,7 @@ export default function Sidebar() {
             ? `Searching… ${optProgress ? Math.round((optProgress.done / Math.max(optProgress.total, 1)) * 100) : 0}%`
             : '✨ Suggest best configuration'}
         </button>
+        <p className="hint">Finds open/closed doors &amp; windows for the <b>current wind and floor plan</b> so air flows through as many rooms as possible (not trapped in one). Re-run after changing wind or the plan. Temp/humidity don’t affect this. Lock openings to keep them fixed.</p>
         {optimizing && (
           <button type="button" className="btn" onClick={() => { cancelRef.current = true; }}>Cancel</button>
         )}
