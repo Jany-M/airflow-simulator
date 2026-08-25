@@ -4,7 +4,7 @@
 // localStorage (debounced) — no backend, no DB.
 
 import { create } from 'zustand';
-import { Plan, Room, Opening, Tool, Wind, EnvConditions, ViewMode, Orient, uid, GRID_W, GRID_H, ensureEnv } from './types';
+import { Plan, Room, Opening, Tool, Wind, EnvConditions, ViewMode, Orient, uid, GRID_W, GRID_H, CELL_METERS, ensureEnv } from './types';
 import { samplePlan, emptyPlan } from './samples';
 import { onRoomBoundary, validateOpenings, overlapsAnyRoom, Side } from './geometry';
 
@@ -21,17 +21,25 @@ export interface AppState {
   optimizing: boolean;
   optProgress: { done: number; total: number } | null;
   lastScoreLabel: string | null;
+  /** Brief status shown over the canvas (e.g. after import). */
+  canvasToast: string | null;
+  /** Mobile controls drawer open (ignored on wide screens via CSS). */
+  mobilePanelOpen: boolean;
 
   setTool: (t: Tool) => void;
   setSelected: (id: string | null) => void;
   setWind: (w: Partial<Wind>) => void;
   setEnv: (e: Partial<EnvConditions>) => void;
   setViewMode: (m: ViewMode) => void;
+  setMobilePanelOpen: (o: boolean) => void;
+  flashCanvasToast: (msg: string) => void;
   addRoom: (r: Omit<Room, 'id' | 'name'>) => void;
   renameRoom: (id: string, name: string) => void;
   deleteRoom: (id: string) => void;
   moveRoom: (id: string, nx: number, ny: number) => void;
   resizeRoom: (id: string, side: Side, pos: number) => void;
+  /** Set room size from metres (width = east–west, length = north–south). Anchored at top-left. */
+  setRoomSizeM: (id: string, widthM: number, lengthM: number) => void;
   moveOpening: (id: string, orient: Orient, x: number, y: number) => void;
   addOpening: (o: Omit<Opening, 'id'>) => void;
   toggleOpening: (id: string) => void;
@@ -73,6 +81,8 @@ function scheduleSave(plan: Plan) {
   }, 400);
 }
 
+let toastTimer: ReturnType<typeof setTimeout> | null = null;
+
 export const useApp = create<AppState>((set, get) => {
   const mut = (fn: (p: Plan) => Plan) => {
     const plan = fn(get().plan);
@@ -90,9 +100,17 @@ export const useApp = create<AppState>((set, get) => {
     optimizing: false,
     optProgress: null,
     lastScoreLabel: null,
+    canvasToast: null,
+    mobilePanelOpen: false,
 
     setTool: t => set({ tool: t, selectedId: null }),
     setSelected: id => set({ selectedId: id }),
+    setMobilePanelOpen: o => set({ mobilePanelOpen: o }),
+    flashCanvasToast: msg => {
+      if (toastTimer) clearTimeout(toastTimer);
+      set({ canvasToast: msg });
+      toastTimer = setTimeout(() => set({ canvasToast: null }), 2800);
+    },
     setWind: w => mut(p => ({ ...p, wind: { ...p.wind, ...w } })),
     setEnv: e => mut(p => ({ ...p, env: { ...p.env, ...e } })),
     setViewMode: m => set({ viewMode: m }),
@@ -154,6 +172,32 @@ export const useApp = create<AppState>((set, get) => {
       });
       const rooms = p.rooms.map(rr => rr.id === id ? { ...rr, x, y, w, h } : rr);
       return validateOpenings({ ...p, rooms, openings });
+    }),
+
+    setRoomSizeM: (id, widthM, lengthM) => mut(p => {
+      const r = p.rooms.find(rr => rr.id === id);
+      if (!r) return p;
+      const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+      // Metres → cells (0.5 m each). Grow/shrink from the top-left corner.
+      const w = clamp(Math.round(widthM / CELL_METERS), 2, GRID_W - r.x);
+      const h = clamp(Math.round(lengthM / CELL_METERS), 2, GRID_H - r.y);
+      if (w === r.w && h === r.h) return p;
+      if (overlapsAnyRoom(p, { x: r.x, y: r.y, w, h }, id)) return p;
+      const oldE = r.x + r.w, oldS = r.y + r.h;
+      const newE = r.x + w, newS = r.y + h;
+      const others = p.rooms.filter(rr => rr.id !== id);
+      const openings = p.openings.map(o => {
+        const exclusive = onRoomBoundary(r, o) && !others.some(rr => onRoomBoundary(rr, o));
+        if (!exclusive) return o;
+        if (o.orient === 'v' && o.x === oldE) return { ...o, x: newE };
+        if (o.orient === 'h' && o.y === oldS) return { ...o, y: newS };
+        return o;
+      });
+      return validateOpenings({
+        ...p,
+        rooms: p.rooms.map(rr => rr.id === id ? { ...rr, w, h } : rr),
+        openings,
+      });
     }),
 
     moveOpening: (id, orient, x, y) => mut(p => validateOpenings({

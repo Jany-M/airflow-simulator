@@ -29,11 +29,12 @@ export const COL = {
   wall: '#8fa3bf',
   wallSelected: '#ffd166',
   roomName: 'rgba(200,215,235,0.75)',
-  windowOpen: '#37d0ff',
-  windowClosed: '#ff5d6c',
+  /** Open window or door — always green. */
+  windowOpen: '#42d77d',
   doorOpen: '#42d77d',
+  windowClosed: '#ff5d6c',
   doorClosed: '#ff5d6c', // closed = red, whether door or window
-  selected: '#ffd166',   // yellow marks selection only
+  selected: '#ffd166',   // yellow ring = selected (long-press), never replaces open/closed
   deadZone: 'rgba(255,80,90,0.16)',
   particle: '#7fe8ff',
   streamline: '#37d0ff',
@@ -186,6 +187,67 @@ export function drawGrid(ctx: CanvasRenderingContext2D, t: Transform) {
   }
 }
 
+/** Screen-space scale bar at the top of the canvas (metres). */
+export function drawScaleBar(ctx: CanvasRenderingContext2D, t: Transform, cw: number) {
+  const candidates = [1, 2, 5, 10];
+  let metres = 2;
+  for (const m of candidates) {
+    const px = (m / CELL_METERS) * t.s;
+    if (px >= 56 && px <= 150) { metres = m; break; }
+    if (px > 150) { metres = m; break; }
+  }
+  // Prefer the largest candidate that still fits comfortably.
+  for (let i = candidates.length - 1; i >= 0; i--) {
+    const px = (candidates[i] / CELL_METERS) * t.s;
+    if (px <= Math.min(160, cw * 0.35) && px >= 48) { metres = candidates[i]; break; }
+  }
+  const barW = (metres / CELL_METERS) * t.s;
+  const x = 14;
+  const y = 18;
+  const padX = 10;
+  const label = `${metres} m`;
+  const sub = `1 cell = ${CELL_METERS} m  ·  plan ${GRID_W * CELL_METERS}×${GRID_H * CELL_METERS} m`;
+
+  ctx.save();
+  ctx.font = `600 12px 'Segoe UI', system-ui, sans-serif`;
+  const labelW = ctx.measureText(label).width;
+  ctx.font = `500 11px 'Segoe UI', system-ui, sans-serif`;
+  const subW = ctx.measureText(sub).width;
+  const boxW = Math.max(barW + padX * 2, labelW + padX * 2, Math.min(subW + padX * 2, cw - 28));
+  const boxH = 44;
+
+  ctx.fillStyle = 'rgba(16, 20, 26, 0.72)';
+  ctx.strokeStyle = 'rgba(143, 163, 191, 0.35)';
+  ctx.lineWidth = 1;
+  roundRect(ctx, x - 4, y - 14, boxW + 8, boxH, 8);
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.fillStyle = 'rgba(223, 232, 245, 0.95)';
+  ctx.font = `600 12px 'Segoe UI', system-ui, sans-serif`;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillText(label, x + padX, y + 2);
+
+  ctx.strokeStyle = '#ffd166';
+  ctx.fillStyle = '#ffd166';
+  ctx.lineWidth = 2.5;
+  ctx.beginPath();
+  ctx.moveTo(x + padX, y + 12);
+  ctx.lineTo(x + padX + barW, y + 12);
+  ctx.stroke();
+  // end ticks
+  ctx.beginPath();
+  ctx.moveTo(x + padX, y + 7); ctx.lineTo(x + padX, y + 17);
+  ctx.moveTo(x + padX + barW, y + 7); ctx.lineTo(x + padX + barW, y + 17);
+  ctx.stroke();
+
+  ctx.fillStyle = 'rgba(143, 163, 191, 0.95)';
+  ctx.font = `500 11px 'Segoe UI', system-ui, sans-serif`;
+  ctx.fillText(sub, x + padX, y + 28);
+  ctx.restore();
+}
+
 export function drawFlowHeatmap(ctx: CanvasRenderingContext2D, t: Transform, f: FlowField, windSpeed: number) {
   const threshold = DEAD_ZONE_SPEED * Math.max(windSpeed, 0.5);
   for (let y = 0; y < f.ny; y++) {
@@ -269,18 +331,15 @@ function strokeRectWithGaps(ctx: CanvasRenderingContext2D, t: Transform, plan: P
 export function drawOpenings(ctx: CanvasRenderingContext2D, t: Transform, plan: Plan, selectedId: string | null) {
   for (const o of plan.openings) {
     const sel = o.id === selectedId;
-    const isWin = o.kind === 'window';
-    // Open doors: green. Open windows: light blue. Yellow marks selection only.
-    const color = sel
-      ? COL.selected
-      : o.open ? (isWin ? COL.windowOpen : COL.doorOpen) : (isWin ? COL.windowClosed : COL.doorClosed);
+    // Open = green, closed = red. Selection adds a yellow ring — it does not recolor status.
+    const color = o.open ? COL.doorOpen : COL.doorClosed;
     const lw = Math.max(3, t.s * (o.open ? 0.32 : 0.26));
 
     const x1 = o.orient === 'h' ? o.x : o.x, y1 = o.orient === 'h' ? o.y : o.y;
     const x2 = o.orient === 'h' ? o.x + o.len : o.x, y2 = o.orient === 'h' ? o.y : o.y + o.len;
 
     ctx.save();
-    if (sel) { ctx.shadowColor = '#ffd166'; ctx.shadowBlur = 12; }
+    if (sel) { ctx.shadowColor = '#ffd166'; ctx.shadowBlur = 14; }
     ctx.strokeStyle = color;
     ctx.lineWidth = lw;
     ctx.lineCap = 'round';
@@ -296,6 +355,11 @@ export function drawOpenings(ctx: CanvasRenderingContext2D, t: Transform, plan: 
     // status glyph at the centre
     const cx = wx(t, (x1 + x2) / 2), cy = wy(t, (y1 + y2) / 2);
     const rr = Math.max(4, t.s * 0.42);
+    if (sel) {
+      ctx.strokeStyle = COL.selected;
+      ctx.lineWidth = Math.max(2, t.s * 0.16);
+      ctx.beginPath(); ctx.arc(cx, cy, rr + 3.5, 0, Math.PI * 2); ctx.stroke();
+    }
     ctx.fillStyle = '#10141a';
     ctx.beginPath(); ctx.arc(cx, cy, rr, 0, Math.PI * 2); ctx.fill();
     ctx.strokeStyle = color; ctx.lineWidth = Math.max(1.5, t.s * 0.12);
@@ -322,6 +386,85 @@ export function drawOpenings(ctx: CanvasRenderingContext2D, t: Transform, plan: 
     }
     ctx.restore();
   }
+}
+
+/** Bottom-left legend for opening / selection colours (drawn last, above particles). */
+export function drawCanvasLegend(
+  ctx: CanvasRenderingContext2D, cw: number, ch: number, _viewMode: 'flow' | 'temp' | 'rh',
+) {
+  const pad = 10;
+  const rowH = 20;
+  const rows: Array<{ draw: (x: number, y: number) => void; label: string }> = [
+    {
+      label: 'Open — click to toggle',
+      draw: (x, y) => {
+        ctx.strokeStyle = COL.doorOpen; ctx.lineWidth = 3; ctx.lineCap = 'round';
+        ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + 22, y); ctx.stroke();
+        ctx.fillStyle = '#10141a'; ctx.beginPath(); ctx.arc(x + 11, y, 6, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = COL.doorOpen; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.arc(x + 11, y, 6, 0, Math.PI * 2); ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(x + 8, y); ctx.lineTo(x + 10, y + 2.5); ctx.lineTo(x + 14.5, y - 2.5);
+        ctx.stroke();
+      },
+    },
+    {
+      label: 'Closed — click to toggle',
+      draw: (x, y) => {
+        ctx.strokeStyle = COL.doorClosed; ctx.lineWidth = 2.5; ctx.lineCap = 'round';
+        ctx.setLineDash([4, 3]);
+        ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + 22, y); ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle = '#10141a'; ctx.beginPath(); ctx.arc(x + 11, y, 6, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = COL.doorClosed; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.arc(x + 11, y, 6, 0, Math.PI * 2); ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(x + 8.5, y - 2.5); ctx.lineTo(x + 13.5, y + 2.5);
+        ctx.moveTo(x + 13.5, y - 2.5); ctx.lineTo(x + 8.5, y + 2.5);
+        ctx.stroke();
+      },
+    },
+    {
+      label: 'Selected / movable — hold ~0.2s',
+      draw: (x, y) => {
+        ctx.strokeStyle = COL.doorOpen; ctx.lineWidth = 2.5; ctx.lineCap = 'round';
+        ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + 22, y); ctx.stroke();
+        ctx.strokeStyle = COL.selected; ctx.lineWidth = 2.5;
+        ctx.beginPath(); ctx.arc(x + 11, y, 9, 0, Math.PI * 2); ctx.stroke();
+        ctx.fillStyle = '#10141a'; ctx.beginPath(); ctx.arc(x + 11, y, 6, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = COL.doorOpen; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.arc(x + 11, y, 6, 0, Math.PI * 2); ctx.stroke();
+      },
+    },
+  ];
+
+  ctx.save();
+  ctx.font = `600 12px 'Segoe UI', system-ui, sans-serif`;
+  let maxLabel = 0;
+  for (const r of rows) maxLabel = Math.max(maxLabel, ctx.measureText(r.label).width);
+  const boxW = Math.min(cw - 16, Math.max(200, 44 + maxLabel + pad * 2));
+  const boxH = pad + rows.length * rowH + 8;
+  // Bottom-right — keeps clear of the climate legend (bottom-left) and the scale bar (top-left).
+  const x0 = Math.max(10, cw - boxW - 12);
+  const y0 = Math.max(8, ch - boxH - 12);
+
+  ctx.fillStyle = 'rgba(16, 20, 26, 0.88)';
+  ctx.strokeStyle = 'rgba(255, 209, 102, 0.45)';
+  ctx.lineWidth = 1.5;
+  roundRect(ctx, x0, y0, boxW, boxH, 8);
+  ctx.fill();
+  ctx.stroke();
+
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  rows.forEach((r, i) => {
+    const y = y0 + pad + i * rowH + rowH / 2;
+    r.draw(x0 + 12, y);
+    ctx.fillStyle = 'rgba(223, 232, 245, 0.96)';
+    ctx.font = `600 12px 'Segoe UI', system-ui, sans-serif`;
+    ctx.fillText(r.label, x0 + 42, y);
+  });
+  ctx.restore();
 }
 
 export function drawWind(ctx: CanvasRenderingContext2D, t: Transform, plan: Plan, cw: number, ch: number) {

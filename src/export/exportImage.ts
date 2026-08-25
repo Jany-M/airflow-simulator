@@ -62,9 +62,8 @@ export function exportPNG(plan: Plan) {
     ctx.fillText(label, lx + 44, ly);
     lx += 44 + ctx.measureText(label).width + 46;
   };
-  item((x, y) => { ctx.strokeStyle = COL.windowOpen; ctx.lineWidth = 8; ctx.lineCap = 'round'; ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + 34, y); ctx.stroke(); }, 'open window');
-  item((x, y) => { ctx.strokeStyle = COL.doorOpen; ctx.lineWidth = 8; ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + 34, y); ctx.stroke(); }, 'open door');
-  item((x, y) => { ctx.strokeStyle = COL.windowClosed; ctx.lineWidth = 6; ctx.setLineDash([8, 7]); ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + 34, y); ctx.stroke(); ctx.setLineDash([]); }, 'closed (keep shut)');
+  item((x, y) => { ctx.strokeStyle = COL.doorOpen; ctx.lineWidth = 8; ctx.lineCap = 'round'; ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + 34, y); ctx.stroke(); }, 'open');
+  item((x, y) => { ctx.strokeStyle = COL.doorClosed; ctx.lineWidth = 6; ctx.setLineDash([8, 7]); ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + 34, y); ctx.stroke(); ctx.setLineDash([]); }, 'closed (keep shut)');
   item((x, y) => { ctx.strokeStyle = COL.streamline; ctx.fillStyle = COL.streamline; ctx.lineWidth = 5; ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + 26, y); ctx.stroke(); ctx.beginPath(); ctx.moveTo(x + 36, y); ctx.lineTo(x + 24, y - 7); ctx.lineTo(x + 24, y + 7); ctx.closePath(); ctx.fill(); }, 'airflow path');
   item((x, y) => { ctx.fillStyle = 'rgba(255,80,90,0.45)'; ctx.fillRect(x, y - 14, 34, 28); }, 'dead zone (little airflow)');
 

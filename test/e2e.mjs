@@ -79,13 +79,19 @@ const ox = box.x + (box.width - 56 * s) / 2;
 const oy = box.y + (box.height - 36 * s) / 2;
 const cellToScreen = (x, y) => ({ x: ox + x * s, y: oy + y * s });
 
-// Click the living-room S window centre (h edge x=14..17, y=20) to open it
+// Click living-room S window (h edge x=14..17, y=20) to open it
 const p1 = cellToScreen(15.5, 20);
 await page.mouse.click(p1.x, p1.y);
 await page.waitForTimeout(1200);
 await page.screenshot({ path: join(OUT, '2-toggled-window.png') });
 
+const openFloorplan = async () => {
+  const fold = page.locator('details.fold').filter({ hasText: 'Floorplan' });
+  if (!(await fold.evaluate(el => el.open))) await fold.locator('summary').click();
+};
+
 // Draw a new room with the Room tool in empty space
+await openFloorplan();
 await page.getByRole('button', { name: 'Room' }).click();
 const r1 = cellToScreen(10, 24);
 const r2 = cellToScreen(22, 32);
@@ -102,7 +108,7 @@ await page.mouse.click(wpos.x, wpos.y);
 await page.waitForTimeout(1200);
 await page.screenshot({ path: join(OUT, '3-new-room-window.png') });
 
-// Long-press + drag the new room (Room 7 at 10,24 → 12x8) to a new spot
+// Select + drag the new room (Room 7 at 10,24 → 12x8) to a new spot
 await page.getByRole('button', { name: 'Select' }).click();
 const readPlan = () => page.evaluate(() => JSON.parse(localStorage.getItem('airflow-simulator:plan:v1')));
 let planState = await readPlan();
@@ -110,8 +116,7 @@ let room7 = planState.rooms.find(r => r.name === 'Room 7');
 const r7c = cellToScreen(room7.x + room7.w / 2, room7.y + room7.h / 2);
 await page.mouse.move(r7c.x, r7c.y);
 await page.mouse.down();
-await page.waitForTimeout(450); // long press
-await page.mouse.move(r7c.x + 2 * s, r7c.y + 2 * s, { steps: 10 }); // to a free spot (overlaps are rejected)
+await page.mouse.move(r7c.x + 2 * s, r7c.y + 2 * s, { steps: 10 }); // drag from interior
 await page.mouse.up();
 await page.waitForTimeout(800); // debounce save
 planState = await readPlan();

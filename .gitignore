@@ -1,6 +1,8 @@
 node_modules/
 dist/
 test/shots/
+test/shots-interaction/
 test/.tmp*/
 *.local
 /_to_delete
+/_dev
