@@ -8,7 +8,8 @@ Static app — no backend. Plans autosave to `localStorage` and export/import as
 
 [![Netlify Status](https://api.netlify.com/api/v1/badges/ed135e10-b4bd-4683-ae2a-8d3e46ff95ac/deploy-status)](https://app.netlify.com/projects/airflowsimulator/deploys)
 
-![AirFlow Simulator](public/AirFlowSimulator.gif)
+<img width="1120" height="480" alt="AirFlowSimulator" src="https://github.com/user-attachments/assets/ee6b8112-4a8f-450f-956d-bf93949c2353" />
+
 
 ## Features
 
