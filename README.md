@@ -8,7 +8,7 @@ Static app — no backend. Plans autosave to `localStorage` and export/import as
 
 [![Netlify Status](https://api.netlify.com/api/v1/badges/ed135e10-b4bd-4683-ae2a-8d3e46ff95ac/deploy-status)](https://app.netlify.com/projects/airflowsimulator/deploys)
 
-![AirFlow Simulator](AirFlowSimulator.gif)
+![AirFlow Simulator](public/AirFlowSimulator.gif)
 
 ## Features
 
@@ -21,7 +21,7 @@ Static app — no backend. Plans autosave to `localStorage` and export/import as
 - **Sidebar** — Simulation → Wind & weather → Environment (collapsed) → Floorplan (collapsed) → Save & export.
 - **Export** — PNG (streamlines, markers, legend) and JSON backup under **Save & export**.
 
-![AirFlow Simulator Export](Sample_apartment_airflow.png)
+![AirFlow Simulator Export](public/Sample_apartment_airflow.png)
 
 ## Run locally
 
