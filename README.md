@@ -22,7 +22,7 @@ Static app — no backend. Plans autosave to `localStorage` and export/import as
 - **Sidebar** — Simulation → Wind & weather → Environment (collapsed) → Floorplan (collapsed) → Save & export.
 - **Export** — PNG (streamlines, markers, legend) and JSON backup under **Save & export**.
 
-![AirFlow Simulator Export](public/Sample_apartment_airflow.png)
+<img width="1800" height="1300" alt="Sample_apartment_airflow" src="https://github.com/user-attachments/assets/21e86d50-83a9-45fb-b07b-c3efff17fbe8" />
 
 ## Run locally
 
