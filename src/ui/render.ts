@@ -9,11 +9,86 @@ import { ClimateSystem } from '../sim/climate';
 
 export interface Transform { s: number; ox: number; oy: number }
 
+/** User pan/zoom on top of the base fit-to-canvas transform. */
+export interface ViewState {
+  zoom: number;
+  panX: number;
+  panY: number;
+}
+
+export const DEFAULT_VIEW: ViewState = { zoom: 1, panX: 0, panY: 0 };
+
+/** Narrow / phone layout — content-framed, tighter padding. */
+export function isMobileCanvas(cw: number) {
+  return cw < 520;
+}
+
 export function fitTransform(cw: number, ch: number, pad = 0.05): Transform {
   const s = Math.min(cw / GRID_W, ch / GRID_H) * (1 - pad);
   const ox = (cw - GRID_W * s) / 2;
   const oy = (ch - GRID_H * s) / 2;
   return { s, ox, oy };
+}
+
+/**
+ * Editor transform: fit the grid (or, on narrow screens, the building bounds) into
+ * the canvas, then apply zoom/pan. Drawing and hit-testing must share this helper
+ * so room locations stay correct when the canvas resizes.
+ *
+ * Mobile: frame the rooms tightly and center the result in the full canvas
+ * (horizontal + vertical) with almost no empty chrome.
+ */
+export function editorTransform(
+  cw: number,
+  ch: number,
+  view: ViewState = DEFAULT_VIEW,
+  pad = 0.09,
+  plan?: Plan | null,
+): Transform {
+  const { x0, y0, x1, y1 } = editorFrameBounds(cw, plan);
+  const bw = Math.max(1, x1 - x0);
+  const bh = Math.max(1, y1 - y0);
+  const mobile = isMobileCanvas(cw);
+  // Mobile: ~1.5% pad only — desktop keeps room for the top scale-bar HUD.
+  const effectivePad = mobile ? 0.015 : pad;
+  const baseS = Math.min(cw / bw, ch / bh) * (1 - effectivePad);
+  const s = baseS * view.zoom;
+  // Explicitly center the framed rect in the canvas, then apply user pan.
+  return {
+    s,
+    ox: (cw - bw * s) / 2 - x0 * s + view.panX,
+    oy: (ch - bh * s) / 2 - y0 * s + view.panY,
+  };
+}
+
+/** World-space rectangle the editor frames at zoom=1 (full grid, or content on mobile). */
+export function editorFrameBounds(cw: number, plan?: Plan | null): { x0: number; y0: number; x1: number; y1: number } {
+  const full = { x0: 0, y0: 0, x1: GRID_W, y1: GRID_H };
+  if (!isMobileCanvas(cw) || !plan?.rooms.length) return full;
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const r of plan.rooms) {
+    x0 = Math.min(x0, r.x);
+    y0 = Math.min(y0, r.y);
+    x1 = Math.max(x1, r.x + r.w);
+    y1 = Math.max(y1, r.y + r.h);
+  }
+  // One cell of breathing room — enough for wall strokes, not empty girdle.
+  const margin = 1;
+  return {
+    x0: Math.max(0, x0 - margin),
+    y0: Math.max(0, y0 - margin),
+    x1: Math.min(GRID_W, x1 + margin),
+    y1: Math.min(GRID_H, y1 + margin),
+  };
+}
+
+/** Base cell size (zoom=1) for the current canvas — used when updating pan during pinch. */
+export function editorBaseScale(cw: number, ch: number, pad = 0.09, plan?: Plan | null): number {
+  const { x0, y0, x1, y1 } = editorFrameBounds(cw, plan);
+  const bw = Math.max(1, x1 - x0);
+  const bh = Math.max(1, y1 - y0);
+  const effectivePad = isMobileCanvas(cw) ? 0.015 : pad;
+  return Math.min(cw / bw, ch / bh) * (1 - effectivePad);
 }
 
 export const wx = (t: Transform, x: number) => t.ox + x * t.s;
@@ -113,7 +188,7 @@ export function drawClimateHeatmap(
   }
 }
 
-/** Per-room average temp/RH badges (climate views). */
+/** Per-room average temp/RH badges (climate views) — sits above the room name. */
 export function drawRoomClimate(
   ctx: CanvasRenderingContext2D, t: Transform, plan: Plan, climate: ClimateSystem, mode: 'temp' | 'rh',
 ) {
@@ -124,14 +199,17 @@ export function drawRoomClimate(
     const a = avgs.get(r.id);
     if (!a) continue;
     const label = mode === 'temp' ? `${a.t.toFixed(1)} °C` : `${a.rh.toFixed(0)}% RH`;
+    // Match room-name sizing so the badge sits cleanly above it (not below the W×L line).
+    const nameFs = Math.max(10, Math.min(t.s * 1.15, (r.w * t.s) / Math.max(r.name.length * 0.62, 1)));
+    const fs = Math.max(8, Math.min(nameFs * 0.72, t.s * 0.72));
     const cx = wx(t, r.x + r.w / 2);
-    const cy = wy(t, r.y + r.h / 2) + t.s * 2.2;
-    const fs = Math.max(10, t.s * 0.95);
+    const cy = wy(t, r.y + r.h / 2) - nameFs * 1.05;
     ctx.font = `600 ${fs}px 'Segoe UI', system-ui, sans-serif`;
     const tw = ctx.measureText(label).width;
     ctx.fillStyle = 'rgba(16,20,26,0.72)';
-    const pad = fs * 0.4;
-    roundRect(ctx, cx - tw / 2 - pad, cy - fs * 0.72, tw + pad * 2, fs * 1.44, fs * 0.4);
+    const padX = fs * 0.38;
+    const padY = fs * 0.28;
+    roundRect(ctx, cx - tw / 2 - padX, cy - fs * 0.55 - padY, tw + padX * 2, fs * 1.1 + padY * 2, fs * 0.35);
     ctx.fill();
     ctx.fillStyle = mode === 'temp' ? '#ffd8a8' : '#a8d8ff';
     ctx.fillText(label, cx, cy);
@@ -152,7 +230,9 @@ function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: numbe
 export function drawClimateLegend(
   ctx: CanvasRenderingContext2D, cw: number, ch: number, mode: 'temp' | 'rh', plan: Plan,
 ) {
-  const W = 180, H = 12, x = 18, y = ch - 40;
+  const mobile = isMobileCanvas(cw);
+  const s = mobile ? 0.82 : 1;
+  const W = 180 * s, H = 12 * s, x = 18 * s, y = ch - 40 * s;
   for (let i = 0; i < W; i++) {
     const f = i / (W - 1);
     if (mode === 'temp') {
@@ -161,21 +241,21 @@ export function drawClimateLegend(
     } else {
       ctx.fillStyle = rhColor(f * 100, 0.95);
     }
-    ctx.fillRect(x + i, y, 1.5, H);
+    ctx.fillRect(x + i, y, 1.5 * s, H);
   }
   ctx.strokeStyle = 'rgba(150,175,205,0.4)';
   ctx.lineWidth = 1;
   ctx.strokeRect(x, y, W, H);
   ctx.fillStyle = 'rgba(200,215,235,0.85)';
-  ctx.font = `500 12px 'Segoe UI', system-ui, sans-serif`;
+  ctx.font = `500 ${12 * s}px 'Segoe UI', system-ui, sans-serif`;
   ctx.textBaseline = 'top';
   ctx.textAlign = 'left';
   const { lo, hi } = tempRange(plan);
-  ctx.fillText(mode === 'temp' ? `${lo.toFixed(0)}°C` : '0%', x, y + H + 4);
+  ctx.fillText(mode === 'temp' ? `${lo.toFixed(0)}°C` : '0%', x, y + H + 4 * s);
   ctx.textAlign = 'right';
-  ctx.fillText(mode === 'temp' ? `${hi.toFixed(0)}°C` : '100%', x + W, y + H + 4);
+  ctx.fillText(mode === 'temp' ? `${hi.toFixed(0)}°C` : '100%', x + W, y + H + 4 * s);
   ctx.textAlign = 'center';
-  ctx.fillText(mode === 'temp' ? 'room temperature' : 'relative humidity', x + W / 2, y - 18);
+  ctx.fillText(mode === 'temp' ? 'room temperature' : 'relative humidity', x + W / 2, y - 18 * s);
 }
 
 export function drawGrid(ctx: CanvasRenderingContext2D, t: Transform) {
@@ -388,70 +468,145 @@ export function drawOpenings(ctx: CanvasRenderingContext2D, t: Transform, plan: 
   }
 }
 
-/** Bottom-left legend for opening / selection colours (drawn last, above particles). */
+export interface LegendHit {
+  toggle: { x: number; y: number; w: number; h: number };
+  /** Full panel when open (mobile) or always (desktop); null when collapsed. */
+  panel: { x: number; y: number; w: number; h: number } | null;
+}
+
+function hitContains(r: { x: number; y: number; w: number; h: number }, px: number, py: number) {
+  return px >= r.x && px <= r.x + r.w && py >= r.y && py <= r.y + r.h;
+}
+
+export function legendHitTest(hit: LegendHit | null, px: number, py: number): 'toggle' | 'panel' | null {
+  if (!hit) return null;
+  if (hitContains(hit.toggle, px, py)) return 'toggle';
+  if (hit.panel && hitContains(hit.panel, px, py)) return 'panel';
+  return null;
+}
+
+/** Bottom-right colour legend. On mobile: collapsed to a tap icon; expand/collapse via toggle. */
 export function drawCanvasLegend(
-  ctx: CanvasRenderingContext2D, cw: number, ch: number, _viewMode: 'flow' | 'temp' | 'rh',
-) {
-  const pad = 10;
-  const rowH = 20;
+  ctx: CanvasRenderingContext2D,
+  cw: number,
+  ch: number,
+  _viewMode: 'flow' | 'temp' | 'rh',
+  opts: { expanded?: boolean } = {},
+): LegendHit {
+  const mobile = isMobileCanvas(cw);
+  const expanded = mobile ? !!opts.expanded : true;
+  const s = mobile ? 0.82 : 1;
+  const pad = 10 * s;
+  const rowH = 20 * s;
+  const iconW = 22 * s;
+  const iconR = 6 * s;
+  const iconRing = 9 * s;
+  const iconGap = 42 * s;
+  const fontPx = 12 * s;
+  const radius = 8 * s;
+
+  const toggleSize = mobile ? 40 : 0;
+  const togglePad = mobile ? 8 : 12;
+  const toggle = {
+    x: cw - toggleSize - togglePad,
+    y: ch - toggleSize - togglePad,
+    w: toggleSize,
+    h: toggleSize,
+  };
+
+  const drawToggleIcon = () => {
+    if (!mobile) return;
+    const cx = toggle.x + toggle.w / 2;
+    const cy = toggle.y + toggle.h / 2;
+    ctx.save();
+    ctx.fillStyle = 'rgba(16, 20, 26, 0.92)';
+    ctx.strokeStyle = expanded ? 'rgba(55, 208, 255, 0.65)' : 'rgba(255, 209, 102, 0.55)';
+    ctx.lineWidth = 1.5;
+    roundRect(ctx, toggle.x, toggle.y, toggle.w, toggle.h, 10);
+    ctx.fill();
+    ctx.stroke();
+    // Three status dots = colour key affordance
+    const dots = [
+      { c: COL.doorOpen, dx: -8 },
+      { c: COL.doorClosed, dx: 0 },
+      { c: COL.selected, dx: 8 },
+    ];
+    for (const d of dots) {
+      ctx.fillStyle = d.c;
+      ctx.beginPath();
+      ctx.arc(cx + d.dx, cy, 4.2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  };
+
+  if (mobile && !expanded) {
+    drawToggleIcon();
+    return { toggle, panel: null };
+  }
+
   const rows: Array<{ draw: (x: number, y: number) => void; label: string }> = [
     {
       label: 'Open — click to toggle',
       draw: (x, y) => {
-        ctx.strokeStyle = COL.doorOpen; ctx.lineWidth = 3; ctx.lineCap = 'round';
-        ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + 22, y); ctx.stroke();
-        ctx.fillStyle = '#10141a'; ctx.beginPath(); ctx.arc(x + 11, y, 6, 0, Math.PI * 2); ctx.fill();
-        ctx.strokeStyle = COL.doorOpen; ctx.lineWidth = 1.5;
-        ctx.beginPath(); ctx.arc(x + 11, y, 6, 0, Math.PI * 2); ctx.stroke();
+        ctx.strokeStyle = COL.doorOpen; ctx.lineWidth = 3 * s; ctx.lineCap = 'round';
+        ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + iconW, y); ctx.stroke();
+        ctx.fillStyle = '#10141a'; ctx.beginPath(); ctx.arc(x + iconW / 2, y, iconR, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = COL.doorOpen; ctx.lineWidth = 1.5 * s;
+        ctx.beginPath(); ctx.arc(x + iconW / 2, y, iconR, 0, Math.PI * 2); ctx.stroke();
         ctx.beginPath();
-        ctx.moveTo(x + 8, y); ctx.lineTo(x + 10, y + 2.5); ctx.lineTo(x + 14.5, y - 2.5);
+        ctx.moveTo(x + iconW / 2 - 3 * s, y);
+        ctx.lineTo(x + iconW / 2 - 1 * s, y + 2.5 * s);
+        ctx.lineTo(x + iconW / 2 + 3.5 * s, y - 2.5 * s);
         ctx.stroke();
       },
     },
     {
       label: 'Closed — click to toggle',
       draw: (x, y) => {
-        ctx.strokeStyle = COL.doorClosed; ctx.lineWidth = 2.5; ctx.lineCap = 'round';
-        ctx.setLineDash([4, 3]);
-        ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + 22, y); ctx.stroke();
+        ctx.strokeStyle = COL.doorClosed; ctx.lineWidth = 2.5 * s; ctx.lineCap = 'round';
+        ctx.setLineDash([4 * s, 3 * s]);
+        ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + iconW, y); ctx.stroke();
         ctx.setLineDash([]);
-        ctx.fillStyle = '#10141a'; ctx.beginPath(); ctx.arc(x + 11, y, 6, 0, Math.PI * 2); ctx.fill();
-        ctx.strokeStyle = COL.doorClosed; ctx.lineWidth = 1.5;
-        ctx.beginPath(); ctx.arc(x + 11, y, 6, 0, Math.PI * 2); ctx.stroke();
+        ctx.fillStyle = '#10141a'; ctx.beginPath(); ctx.arc(x + iconW / 2, y, iconR, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = COL.doorClosed; ctx.lineWidth = 1.5 * s;
+        ctx.beginPath(); ctx.arc(x + iconW / 2, y, iconR, 0, Math.PI * 2); ctx.stroke();
         ctx.beginPath();
-        ctx.moveTo(x + 8.5, y - 2.5); ctx.lineTo(x + 13.5, y + 2.5);
-        ctx.moveTo(x + 13.5, y - 2.5); ctx.lineTo(x + 8.5, y + 2.5);
+        ctx.moveTo(x + iconW / 2 - 2.5 * s, y - 2.5 * s); ctx.lineTo(x + iconW / 2 + 2.5 * s, y + 2.5 * s);
+        ctx.moveTo(x + iconW / 2 + 2.5 * s, y - 2.5 * s); ctx.lineTo(x + iconW / 2 - 2.5 * s, y + 2.5 * s);
         ctx.stroke();
       },
     },
     {
-      label: 'Selected / movable — hold ~0.2s',
+      label: mobile ? 'Selected — hold ~0.2s' : 'Selected / movable — hold ~0.2s',
       draw: (x, y) => {
-        ctx.strokeStyle = COL.doorOpen; ctx.lineWidth = 2.5; ctx.lineCap = 'round';
-        ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + 22, y); ctx.stroke();
-        ctx.strokeStyle = COL.selected; ctx.lineWidth = 2.5;
-        ctx.beginPath(); ctx.arc(x + 11, y, 9, 0, Math.PI * 2); ctx.stroke();
-        ctx.fillStyle = '#10141a'; ctx.beginPath(); ctx.arc(x + 11, y, 6, 0, Math.PI * 2); ctx.fill();
-        ctx.strokeStyle = COL.doorOpen; ctx.lineWidth = 1.5;
-        ctx.beginPath(); ctx.arc(x + 11, y, 6, 0, Math.PI * 2); ctx.stroke();
+        ctx.strokeStyle = COL.doorOpen; ctx.lineWidth = 2.5 * s; ctx.lineCap = 'round';
+        ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + iconW, y); ctx.stroke();
+        ctx.strokeStyle = COL.selected; ctx.lineWidth = 2.5 * s;
+        ctx.beginPath(); ctx.arc(x + iconW / 2, y, iconRing, 0, Math.PI * 2); ctx.stroke();
+        ctx.fillStyle = '#10141a'; ctx.beginPath(); ctx.arc(x + iconW / 2, y, iconR, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = COL.doorOpen; ctx.lineWidth = 1.5 * s;
+        ctx.beginPath(); ctx.arc(x + iconW / 2, y, iconR, 0, Math.PI * 2); ctx.stroke();
       },
     },
   ];
 
   ctx.save();
-  ctx.font = `600 12px 'Segoe UI', system-ui, sans-serif`;
+  ctx.font = `600 ${fontPx}px 'Segoe UI', system-ui, sans-serif`;
   let maxLabel = 0;
   for (const r of rows) maxLabel = Math.max(maxLabel, ctx.measureText(r.label).width);
-  const boxW = Math.min(cw - 16, Math.max(200, 44 + maxLabel + pad * 2));
-  const boxH = pad + rows.length * rowH + 8;
-  // Bottom-right — keeps clear of the climate legend (bottom-left) and the scale bar (top-left).
-  const x0 = Math.max(10, cw - boxW - 12);
-  const y0 = Math.max(8, ch - boxH - 12);
+  const boxW = Math.min(cw - 16, Math.max(160 * s, iconGap + 2 + maxLabel + pad * 2));
+  const boxH = pad + rows.length * rowH + 8 * s;
+  // Above the toggle on mobile; bottom-right on desktop.
+  const x0 = Math.max(8, cw - boxW - (mobile ? 8 : 12));
+  const y0 = mobile
+    ? Math.max(8, toggle.y - boxH - 8)
+    : Math.max(8, ch - boxH - 12);
 
   ctx.fillStyle = 'rgba(16, 20, 26, 0.88)';
   ctx.strokeStyle = 'rgba(255, 209, 102, 0.45)';
-  ctx.lineWidth = 1.5;
-  roundRect(ctx, x0, y0, boxW, boxH, 8);
+  ctx.lineWidth = 1.5 * s;
+  roundRect(ctx, x0, y0, boxW, boxH, radius);
   ctx.fill();
   ctx.stroke();
 
@@ -459,57 +614,148 @@ export function drawCanvasLegend(
   ctx.textBaseline = 'middle';
   rows.forEach((r, i) => {
     const y = y0 + pad + i * rowH + rowH / 2;
-    r.draw(x0 + 12, y);
+    r.draw(x0 + 12 * s, y);
     ctx.fillStyle = 'rgba(223, 232, 245, 0.96)';
-    ctx.font = `600 12px 'Segoe UI', system-ui, sans-serif`;
-    ctx.fillText(r.label, x0 + 42, y);
+    ctx.font = `600 ${fontPx}px 'Segoe UI', system-ui, sans-serif`;
+    ctx.fillText(r.label, x0 + iconGap, y);
   });
   ctx.restore();
+
+  drawToggleIcon();
+
+  return {
+    toggle: mobile ? toggle : { x: 0, y: 0, w: 0, h: 0 },
+    panel: { x: x0, y: y0, w: boxW, h: boxH },
+  };
 }
 
 export function drawWind(ctx: CanvasRenderingContext2D, t: Transform, plan: Plan, cw: number, ch: number) {
   const wv = windVector(plan.wind);
-  // Ambient wind arrows drifting outside the building, upwind side
+  const cyan = COL.streamline; // same accent as sidebar wind dial
+  const mobile = isMobileCanvas(cw);
+
+  // Ambient wind arrows on the upwind side of the *building* (not the full grid).
+  let bx0 = 0, by0 = 0, bx1 = GRID_W, by1 = GRID_H;
+  if (plan.rooms.length) {
+    bx0 = Infinity; by0 = Infinity; bx1 = -Infinity; by1 = -Infinity;
+    for (const r of plan.rooms) {
+      bx0 = Math.min(bx0, r.x);
+      by0 = Math.min(by0, r.y);
+      bx1 = Math.max(bx1, r.x + r.w);
+      by1 = Math.max(by1, r.y + r.h);
+    }
+  }
+  const cx = (bx0 + bx1) / 2;
+  const cy = (by0 + by1) / 2;
+
+  // Distance from building centre to the AABB face in the upwind direction (−wind).
+  const ux = -wv.x, uy = -wv.y;
+  let buildExt = Math.max((bx1 - bx0) / 2, (by1 - by0) / 2, 4);
+  {
+    let hit = Infinity;
+    if (Math.abs(ux) > 1e-6) hit = Math.min(hit, (ux > 0 ? bx1 - cx : bx0 - cx) / ux);
+    if (Math.abs(uy) > 1e-6) hit = Math.min(hit, (uy > 0 ? by1 - cy : by0 - cy) / uy);
+    if (Number.isFinite(hit) && hit > 0) buildExt = hit;
+  }
+
+  const preferredGap = mobile ? 0.65 : 3.5;
+  const minGap = mobile ? 0.45 : 0.8; // stay clear of walls — never cover the plan
+  let spacing = mobile ? 2.0 : 4;
+  let fan = mobile ? 2 : 3;
+  let len = mobile ? 1.5 : 2.4;
+  const head = Math.max(4, t.s * 0.35);
+  // Keep arrows inside the canvas (sidebar / window edges clip anything outside).
+  const inset = mobile ? 8 : 14;
+
+  const arrowFits = (standoff: number, fanN: number, gap: number, arrowLen: number) => {
+    const perpX = -wv.y, perpY = wv.x;
+    for (let k = -fanN; k <= fanN; k++) {
+      const x0 = cx - wv.x * standoff + perpX * k * gap;
+      const y0 = cy - wv.y * standoff + perpY * k * gap;
+      const x1 = x0 + wv.x * arrowLen;
+      const y1 = y0 + wv.y * arrowLen;
+      // Tail, tip, and a little past the tip for the arrowhead.
+      const samples = [
+        [x0, y0],
+        [x1, y1],
+        [x1 + wv.x * (head / Math.max(t.s, 1e-6)) * 0.35, y1 + wv.y * (head / Math.max(t.s, 1e-6)) * 0.35],
+      ];
+      for (const [x, y] of samples) {
+        const sx = wx(t, x), sy = wy(t, y);
+        if (sx < inset || sy < inset || sx > cw - inset || sy > ch - inset) return false;
+      }
+    }
+    return true;
+  };
+
+  let standoff = buildExt + preferredGap;
+  const minStandoff = buildExt + minGap;
+
+  // Shrink standoff toward the plan until the fan fits on-screen (desktop resize / narrow canvas).
+  if (!arrowFits(standoff, fan, spacing, len)) {
+    let fitted = false;
+    for (let s = standoff; s >= minStandoff; s -= 0.12) {
+      if (arrowFits(s, fan, spacing, len)) {
+        standoff = s;
+        fitted = true;
+        break;
+      }
+    }
+    if (!fitted) standoff = minStandoff;
+  }
+  // If still clipped at min gap, tighten the fan / length rather than overlapping rooms.
+  if (!arrowFits(standoff, fan, spacing, len)) {
+    while (fan > 1 && !arrowFits(standoff, fan, spacing, len)) fan -= 1;
+    while (spacing > 1.4 && !arrowFits(standoff, fan, spacing, len)) spacing -= 0.25;
+    while (len > 1.1 && !arrowFits(standoff, fan, spacing, len)) len -= 0.15;
+  }
+
   ctx.save();
-  ctx.strokeStyle = 'rgba(120,200,255,0.35)';
+  ctx.strokeStyle = 'rgba(55,208,255,0.32)';
+  ctx.fillStyle = 'rgba(55,208,255,0.32)';
   ctx.lineWidth = Math.max(1.5, t.s * 0.1);
   ctx.lineCap = 'round';
-  const cx0 = GRID_W / 2 - wv.x * (GRID_W / 2 + 3);
-  const cy0 = GRID_H / 2 - wv.y * (GRID_H / 2 + 3);
+  const ax0 = cx - wv.x * standoff;
+  const ay0 = cy - wv.y * standoff;
   const perpX = -wv.y, perpY = wv.x;
-  for (let k = -3; k <= 3; k++) {
-    const bx = cx0 + perpX * k * 4;
-    const by = cy0 + perpY * k * 4;
-    const len = 2.4;
-    arrow(ctx, wx(t, bx), wy(t, by), wx(t, bx + wv.x * len), wy(t, by + wv.y * len), Math.max(4, t.s * 0.35));
+  for (let k = -fan; k <= fan; k++) {
+    const bx = ax0 + perpX * k * spacing;
+    const by = ay0 + perpY * k * spacing;
+    arrow(ctx, wx(t, bx), wy(t, by), wx(t, bx + wv.x * len), wy(t, by + wv.y * len), head);
   }
   ctx.restore();
 
-  // Compass rose, top-right corner
-  const R = Math.min(cw, ch) * 0.055;
-  const px = cw - R - 16, py = R + 16;
+  // Compass rose, top-right — arrow inside ring, cardinals drawn last so they stay readable
+  const R = Math.min(cw, ch) * (mobile ? 0.048 : 0.055);
+  const px = cw - R - (mobile ? 10 : 16);
+  const py = R + (mobile ? 12 : 16);
   ctx.save();
-  ctx.fillStyle = 'rgba(16,20,26,0.85)';
+  ctx.fillStyle = 'rgba(16,20,26,0.88)';
   ctx.beginPath(); ctx.arc(px, py, R + 8, 0, Math.PI * 2); ctx.fill();
-  ctx.strokeStyle = 'rgba(150,175,205,0.4)'; ctx.lineWidth = 1;
+  ctx.strokeStyle = 'rgba(55,208,255,0.35)'; ctx.lineWidth = 1;
   ctx.beginPath(); ctx.arc(px, py, R, 0, Math.PI * 2); ctx.stroke();
-  ctx.fillStyle = 'rgba(200,215,235,0.8)';
-  ctx.font = `600 ${R * 0.38}px 'Segoe UI', sans-serif`;
-  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.fillText('N', px, py - R * 0.68);
-  ctx.font = `400 ${R * 0.3}px 'Segoe UI', sans-serif`;
-  ctx.fillStyle = 'rgba(160,180,205,0.6)';
-  ctx.fillText('S', px, py + R * 0.68);
-  ctx.fillText('E', px + R * 0.68, py);
-  ctx.fillText('W', px - R * 0.68, py);
-  ctx.strokeStyle = COL.windowOpen;
-  ctx.fillStyle = COL.windowOpen;
+
+  // Short cyan arrow so tips stay clear of N/E/S/W labels
+  ctx.strokeStyle = cyan;
+  ctx.fillStyle = cyan;
   ctx.lineWidth = Math.max(2, R * 0.12);
   ctx.lineCap = 'round';
-  arrow(ctx, px - wv.x * R * 0.55, py - wv.y * R * 0.55, px + wv.x * R * 0.55, py + wv.y * R * 0.55, R * 0.28);
+  const half = R * 0.38;
+  arrow(ctx, px - wv.x * half, py - wv.y * half, px + wv.x * half, py + wv.y * half, R * 0.22);
+
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillStyle = 'rgba(223,232,245,0.95)';
+  ctx.font = `600 ${R * 0.38}px 'Segoe UI', sans-serif`;
+  ctx.fillText('N', px, py - R * 0.78);
+  ctx.font = `400 ${R * 0.3}px 'Segoe UI', sans-serif`;
+  ctx.fillStyle = 'rgba(160,180,205,0.75)';
+  ctx.fillText('S', px, py + R * 0.78);
+  ctx.fillText('E', px + R * 0.78, py);
+  ctx.fillText('W', px - R * 0.78, py);
+
   ctx.font = `500 ${R * 0.34}px 'Segoe UI', sans-serif`;
   ctx.fillStyle = 'rgba(200,225,245,0.9)';
-  ctx.fillText(`${plan.wind.speed.toFixed(1)} m/s`, px, py + R + 20);
+  ctx.fillText(`${plan.wind.speed.toFixed(1)} m/s`, px, py + R + (mobile ? 16 : 20));
   ctx.restore();
 }
 

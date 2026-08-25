@@ -1,6 +1,6 @@
 # 🌬️ Airflow Simulator
 
-Interactive web app to **simulate natural cross-ventilation**. Draw rooms, place windows and doors, set the wind, watch particles flow, and find openings that keep air moving through the plan.
+Interactive web app to **simulate natural cross-ventilation**. Draw rooms, place windows and doors, get live wind and weather conditions, watch particles flow, and find the optmimal configuration that keeps air moving through the floorplan, lowering rooms temperature and humidity.
 
 Static app — no backend. Plans autosave to `localStorage` and export/import as JSON.
 
@@ -12,15 +12,14 @@ Static app — no backend. Plans autosave to `localStorage` and export/import as
 
 ## Features
 
-- **Floor-plan editor** — grid rooms (1 cell = 0.5 m, plan 28×18 m), windows/doors on any wall, scale bar, W×L metre inputs, sample plan, erase/rename
-- **Select & edit** — click room to select (yellow); drag interior to move, drag wall to resize. Click opening to open (**green**) / close (**red**); hold ~0.2 s to select (yellow ring) and drag along walls. Colour key bottom-right
-- **Live airflow** — pressure-network solver + wind particles; dead zones tinted red; instant re-solve on edits
-- **Best configuration** — searches open/closed sets to maximize ventilated floor area (🔒 locks openings)
-- **Weather** — [Open-Meteo](https://open-meteo.com) via geolocation or town search (no API key; HTTPS/localhost for GPS)
-- **Climate views** — Airflow / Temp / Humidity at the top of the sidebar; outdoor air advects through inlets; Environment baselines in a collapsible panel
-- **Sidebar** — Simulation → Wind & weather → Environment (collapsed) → Floorplan (collapsed) → Save & export
-- **Export** — PNG (streamlines, markers, legend) and JSON backup under **Save & export**
-- **Mobile** — full-screen canvas; **Controls** bottom sheet for the same sidebar sections
+- **Floor-plan editor** — grid rooms (1 cell = 0.5 m, plan 28×18 m), windows/doors on any wall, scale bar, W×L metre inputs, sample plan, erase/rename. On mobile: frames the building tightly; pinch to zoom, two-finger pan (Ctrl/Cmd+0 resets; mouse wheel zooms).
+- **Select & edit** — click room to select (yellow); drag interior to move, drag wall to resize. Click opening to open (**green**) / close (**red**); hold ~0.2 s to select (yellow ring) and drag along walls.
+- **Live airflow** — pressure-network solver + wind particles; dead zones tinted red.
+- **Best configuration** — searches open/closed sets to maximize ventilated floor area.
+- **Weather** — [Open-Meteo](https://open-meteo.com) via geolocation or town search.
+- **Climate views** — Airflow / Temp / Humidity based on live location; outdoor air advects through inlets; Environment baselines customizable in a collapsible panel.
+- **Sidebar** — Simulation → Wind & weather → Environment (collapsed) → Floorplan (collapsed) → Save & export.
+- **Export** — PNG (streamlines, markers, legend) and JSON backup under **Save & export**.
 
 ![AirFlow Simulator Export](Sample_apartment_airflow.png)
 

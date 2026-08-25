@@ -6,9 +6,10 @@ import { solve, scoreField, FlowField } from '../sim/solver';
 import { ParticleSystem } from '../sim/particles';
 import { ClimateSystem } from '../sim/climate';
 import {
-  fitTransform, toWorld, wx, wy, COL,
+  editorTransform, editorBaseScale, editorFrameBounds, toWorld, wx, wy, COL, DEFAULT_VIEW,
   drawGrid, drawScaleBar, drawFlowHeatmap, drawRooms, drawOpenings, drawWind, drawParticles,
-  drawClimateHeatmap, drawRoomClimate, drawClimateLegend, drawCanvasLegend,
+  drawClimateHeatmap, drawRoomClimate, drawClimateLegend, drawCanvasLegend, legendHitTest, isMobileCanvas,
+  type ViewState, type LegendHit,
 } from './render';
 
 interface DragRect { x0: number; y0: number; x1: number; y1: number }
@@ -20,6 +21,8 @@ const EDITOR_PAD = 0.09;
 const DRAG_THRESH = 0.35;
 /** Hold this long on an opening to select it (yellow ring) and allow dragging. */
 const OPENING_LONG_PRESS_MS = 200;
+const VIEW_ZOOM_MIN = 0.75;
+const VIEW_ZOOM_MAX = 5;
 
 /**
  * Pending press. Rooms: click selects, drag moves.
@@ -123,6 +126,19 @@ export default function EditorCanvas() {
   const mouseRef = useRef<{ x: number; y: number } | null>(null);
   const pressRef = useRef<Press | null>(null);
   const dragModeRef = useRef<DragMode | null>(null);
+  const viewRef = useRef<ViewState>({ ...DEFAULT_VIEW });
+  /** Active pointers for pinch-zoom / two-finger pan (client coords relative to canvas). */
+  const pointersRef = useRef(new Map<number, { x: number; y: number }>());
+  const pinchRef = useRef<{
+    startDist: number;
+    startZoom: number;
+    worldMid: { x: number; y: number };
+  } | null>(null);
+  /** After a pinch, ignore the leftover pointer-up so we don't toggle openings. */
+  const gestureSuppressRef = useRef(false);
+  /** Mobile colour-legend popover (collapsed to icon by default). */
+  const legendOpenRef = useRef(false);
+  const legendHitRef = useRef<LegendHit | null>(null);
 
   const plan = useApp(s => s.plan);
   const rev = useApp(s => s.rev);
@@ -199,7 +215,7 @@ export default function EditorCanvas() {
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       const cw = canvas.width / dpr, ch = canvas.height / dpr;
-      const t = fitTransform(cw, ch, EDITOR_PAD);
+      const t = editorTransform(cw, ch, viewRef.current, EDITOR_PAD, plan);
 
       ctx.fillStyle = COL.bg;
       ctx.fillRect(0, 0, cw, ch);
@@ -370,7 +386,9 @@ export default function EditorCanvas() {
       }
 
       // Always on top so particles / ghosts never hide it.
-      drawCanvasLegend(ctx, cw, ch, viewMode);
+      legendHitRef.current = drawCanvasLegend(ctx, cw, ch, viewMode, {
+        expanded: legendOpenRef.current,
+      });
 
       raf = requestAnimationFrame(frame);
     };
@@ -382,10 +400,71 @@ export default function EditorCanvas() {
   useEffect(() => {
     const canvas = canvasRef.current!;
 
-    const worldPos = (e: PointerEvent) => {
+    const canvasSize = () => {
       const rect = canvas.getBoundingClientRect();
-      const t = fitTransform(rect.width, rect.height, EDITOR_PAD);
-      return toWorld(t, e.clientX - rect.left, e.clientY - rect.top);
+      return { cw: rect.width, ch: rect.height, rect };
+    };
+
+    const currentTransform = () => {
+      const { cw, ch } = canvasSize();
+      return editorTransform(cw, ch, viewRef.current, EDITOR_PAD, stateRef.current.plan);
+    };
+
+    const screenPos = (e: PointerEvent) => {
+      const { rect } = canvasSize();
+      return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+    };
+
+    const worldPos = (e: PointerEvent) => {
+      const p = screenPos(e);
+      return toWorld(currentTransform(), p.x, p.y);
+    };
+
+    const setViewAround = (zoom: number, screenX: number, screenY: number, world: { x: number; y: number }) => {
+      const { cw, ch } = canvasSize();
+      const plan = stateRef.current.plan;
+      const s = editorBaseScale(cw, ch, EDITOR_PAD, plan) * zoom;
+      const { x0, y0, x1, y1 } = editorFrameBounds(cw, plan);
+      const bw = Math.max(1, x1 - x0);
+      const bh = Math.max(1, y1 - y0);
+      viewRef.current = {
+        zoom,
+        panX: screenX - (cw - bw * s) / 2 + x0 * s - world.x * s,
+        panY: screenY - (ch - bh * s) / 2 + y0 * s - world.y * s,
+      };
+    };
+
+    const cancelToolGesture = () => {
+      if (pressRef.current?.timer) clearTimeout(pressRef.current.timer);
+      pressRef.current = null;
+      dragModeRef.current = null;
+      dragRef.current = null;
+    };
+
+    const applyPinch = () => {
+      const pts = [...pointersRef.current.values()];
+      if (pts.length < 2 || !pinchRef.current) return;
+      const a = pts[0], b = pts[1];
+      const dist = Math.hypot(a.x - b.x, a.y - b.y) || 1;
+      const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+      const { startDist, startZoom, worldMid } = pinchRef.current;
+      const zoom = Math.max(VIEW_ZOOM_MIN, Math.min(VIEW_ZOOM_MAX, startZoom * (dist / startDist)));
+      setViewAround(zoom, mid.x, mid.y, worldMid);
+    };
+
+    const startPinch = () => {
+      const pts = [...pointersRef.current.values()];
+      if (pts.length < 2) return;
+      cancelToolGesture();
+      gestureSuppressRef.current = true;
+      const a = pts[0], b = pts[1];
+      const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+      const t = currentTransform();
+      pinchRef.current = {
+        startDist: Math.hypot(a.x - b.x, a.y - b.y) || 1,
+        startZoom: viewRef.current.zoom,
+        worldMid: toWorld(t, mid.x, mid.y),
+      };
     };
 
     const refreshPlacementPreview = (w: { x: number; y: number }) => {
@@ -398,10 +477,35 @@ export default function EditorCanvas() {
     };
 
     const onDown = (e: PointerEvent) => {
+      const sp = screenPos(e);
+      pointersRef.current.set(e.pointerId, sp);
+      canvas.setPointerCapture(e.pointerId);
+
+      // Mobile legend icon / panel — tap icon to open/close; swallow hits on the open panel.
+      if (isMobileCanvas(canvasSize().cw)) {
+        const kind = legendHitTest(legendHitRef.current, sp.x, sp.y);
+        if (kind === 'toggle') {
+          legendOpenRef.current = !legendOpenRef.current;
+          e.preventDefault();
+          return;
+        }
+        if (kind === 'panel') {
+          e.preventDefault();
+          return;
+        }
+      }
+
+      if (pointersRef.current.size >= 2) {
+        startPinch();
+        e.preventDefault();
+        return;
+      }
+
+      if (gestureSuppressRef.current) return;
+
       const { plan, tool, selectedId } = stateRef.current;
       const st = useApp.getState();
       const w = worldPos(e);
-      canvas.setPointerCapture(e.pointerId);
 
       if (tool === 'room') {
         const gx = Math.round(Math.max(0, Math.min(w.x, GRID_W)));
@@ -523,6 +627,20 @@ export default function EditorCanvas() {
     };
 
     const onMove = (e: PointerEvent) => {
+      if (pointersRef.current.has(e.pointerId)) {
+        pointersRef.current.set(e.pointerId, screenPos(e));
+      }
+
+      if (pointersRef.current.size >= 2) {
+        if (!pinchRef.current) startPinch();
+        applyPinch();
+        e.preventDefault();
+        return;
+      }
+
+      if (pinchRef.current) return;
+      if (gestureSuppressRef.current) return;
+
       const { plan, tool } = stateRef.current;
       const w = worldPos(e);
       mouseRef.current = w;
@@ -596,7 +714,16 @@ export default function EditorCanvas() {
       }
     };
 
-    const onUp = () => {
+    const onUp = (e: PointerEvent) => {
+      pointersRef.current.delete(e.pointerId);
+      if (pointersRef.current.size < 2) {
+        pinchRef.current = null;
+      }
+      if (gestureSuppressRef.current) {
+        if (pointersRef.current.size === 0) gestureSuppressRef.current = false;
+        return;
+      }
+
       const st = useApp.getState();
 
       // Commit an active drag.
@@ -642,6 +769,19 @@ export default function EditorCanvas() {
       }
     };
 
+    const onWheel = (e: WheelEvent) => {
+      // Pinch-to-zoom on trackpads sends ctrl+wheel; also allow plain wheel over the canvas.
+      e.preventDefault();
+      const { rect } = canvasSize();
+      const mx = e.clientX - rect.left;
+      const my = e.clientY - rect.top;
+      const before = currentTransform();
+      const world = toWorld(before, mx, my);
+      const factor = Math.exp(-e.deltaY * 0.0015);
+      const zoom = Math.max(VIEW_ZOOM_MIN, Math.min(VIEW_ZOOM_MAX, viewRef.current.zoom * factor));
+      setViewAround(zoom, mx, my, world);
+    };
+
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Delete' || e.key === 'Backspace') {
         const tag = (e.target as HTMLElement)?.tagName;
@@ -660,20 +800,28 @@ export default function EditorCanvas() {
         pressRef.current = null;
         useApp.getState().setSelected(null);
       }
+      if ((e.key === '0' || e.key === 'Home') && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        viewRef.current = { ...DEFAULT_VIEW };
+      }
     };
 
     canvas.addEventListener('pointerdown', onDown);
     canvas.addEventListener('pointermove', onMove);
     canvas.addEventListener('pointerup', onUp);
+    canvas.addEventListener('pointercancel', onUp);
     canvas.addEventListener('pointerenter', onEnter);
     canvas.addEventListener('pointerleave', onLeave);
+    canvas.addEventListener('wheel', onWheel, { passive: false });
     window.addEventListener('keydown', onKey);
     return () => {
       canvas.removeEventListener('pointerdown', onDown);
       canvas.removeEventListener('pointermove', onMove);
       canvas.removeEventListener('pointerup', onUp);
+      canvas.removeEventListener('pointercancel', onUp);
       canvas.removeEventListener('pointerenter', onEnter);
       canvas.removeEventListener('pointerleave', onLeave);
+      canvas.removeEventListener('wheel', onWheel);
       window.removeEventListener('keydown', onKey);
     };
   }, []);
