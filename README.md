@@ -2,7 +2,9 @@
 
 Interactive web app to **simulate natural cross-ventilation**. Draw rooms, place windows and doors, get live wind and weather conditions, watch particles flow, and find the optimal configuration that keeps air moving through the floorplan, lowering rooms temperature and humidity.
 
-**Live:** [airflowsimulator.netlify.app](https://airflowsimulator.netlify.app/)
+How and why I built this: [From a Real Problem to a Working Web App](https://www.shambix.com/from-a-real-problem-to-a-working-web-app/)
+
+**Live App:** [airflowsimulator.netlify.app](https://airflowsimulator.netlify.app/)
 
 [![Netlify Status](https://api.netlify.com/api/v1/badges/ed135e10-b4bd-4683-ae2a-8d3e46ff95ac/deploy-status)](https://app.netlify.com/projects/airflowsimulator/deploys)
 
@@ -101,7 +103,7 @@ Temperature and relative humidity are carried as scalar fields on the same grid.
 4. **Slow relaxation** toward an indoor baseline (thermal-mass metaphor)
 5. **Diffusion** through open faces only
 
-RH is mixed as a simple scalar — there is no psychrometric coupling, and temperature does not drive buoyancy-driven flow (no stack effect).
+RH is mixed as a simple scalar, there is no psychrometric coupling, and temperature does not drive buoyancy-driven flow (no stack effect).
 
 ### Best-configuration optimiser
 
@@ -130,7 +132,7 @@ Each candidate configuration is evaluated by running the solver and computing a 
 
 For larger plans, backward elimination is used because a greedy forward-only search cannot discover ventilation paths that require multiple openings to open together (e.g. a door *and* a window must both be open before a downstream room receives airflow). The algorithm closes openings one at a time as long as the score does not decrease, then re-opens any closed opening that strictly improves the result.
 
-The objective and search strategy are **original** — they are not based on a published optimisation model. Results are qualitative recommendations for the displayed wind direction.
+The objective and search strategy are **original**, they are not based on a published optimisation model. Results are qualitative recommendations for the displayed wind direction.
 
 ### Scope and limitations
 
