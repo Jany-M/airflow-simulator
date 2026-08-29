@@ -2,11 +2,19 @@
 
 Interactive web app to **simulate natural cross-ventilation**. Draw rooms, place windows and doors, get live wind and weather conditions, watch particles flow, and find the optimal configuration that keeps air moving through the floorplan, lowering rooms temperature and humidity.
 
-[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-shambinx-FFDD00?style=flat-square&logo=buy-me-a-coffee&logoColor=black)](https://www.buymeacoffee.com/shambinx)
-
 > How and why I built this: [From a Real Problem to a Working Web App](https://www.shambix.com/from-a-real-problem-to-a-working-web-app?utm_source=airflow-simulator&utm_medium=github)
 
-**Live App:** [airflowsimulator.netlify.app](https://airflowsimulator.netlify.app/)
+## Support this Project if you like it
+
+[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-shambix-FFDD00?style=flat-square&logo=buy-me-a-coffee&logoColor=black)](https://www.buymeacoffee.com/shambix)
+
+[![Sponsor this on GitHub](https://img.shields.io/github/sponsors/Jany-M?label=Sponsor&logo=githubsponsors&logoColor=white&color=EA4AAA)](https://github.com/sponsors/Jany-M)
+
+
+
+## Check out the Live App
+
+🔗 [airflowsimulator.netlify.app](https://airflowsimulator.netlify.app/)
 
 [![Netlify Status](https://api.netlify.com/api/v1/badges/ed135e10-b4bd-4683-ae2a-8d3e46ff95ac/deploy-status)](https://app.netlify.com/projects/airflowsimulator/deploys)
 
@@ -166,3 +174,7 @@ The objective and search strategy are **original**, they are not based on a publ
 Use the simulator to **compare strategies and identify dead zones**, not to size openings or predict measured air speeds.
 
 See [CHANGELOG.md](CHANGELOG.md) for release notes (current version **1.2.1**).
+
+## Need a custom web / mobile / cloud / AI app developed?
+
+[Get in touch!](https://www.shambix.com) or email [info@shambix.com](mailto:info@shambix.com) .
