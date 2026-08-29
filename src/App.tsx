@@ -37,7 +37,7 @@ export default function App() {
               {canvasToast}
             </div>
           )}
-          <RoomMeasureBox />
+          <div className="mobile-only-measure"><RoomMeasureBox /></div>
         </div>
       </main>
 
