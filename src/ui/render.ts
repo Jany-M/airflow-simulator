@@ -6,6 +6,7 @@ import { Plan, Opening, GRID_W, GRID_H, CELL_METERS, windVector } from '../model
 import { FlowField, sampleVelocity, DEAD_ZONE_SPEED } from '../sim/solver';
 import { Particle } from '../sim/particles';
 import { ClimateSystem } from '../sim/climate';
+import { HEATMAP_ALPHA_MIN, HEATMAP_ALPHA_MAX, HEATMAP_SPEED_PERCENTILE } from '../sim/constants';
 
 export interface Transform { s: number; ox: number; oy: number }
 
@@ -120,9 +121,24 @@ export const COL = {
   text: '#dfe8f5',
 };
 
-export function speedColor(sp: number, max: number): string {
-  const t = max > 0 ? Math.min(sp / (max * 0.75), 1) : 0;
-  return flowColor(t, 0.10 + 0.16 * t);
+export function speedColor(sp: number, normMax: number): string {
+  const t = normMax > 0 ? Math.min(sp / normMax, 1) : 0;
+  const alpha = HEATMAP_ALPHA_MIN + (HEATMAP_ALPHA_MAX - HEATMAP_ALPHA_MIN) * t;
+  return flowColor(t, alpha);
+}
+
+/** Percentile-based speed scale for heatmaps (shared editor + export). */
+export function flowSpeedNorm(f: FlowField, windSpeed: number): { normMax: number; threshold: number } {
+  const threshold = DEAD_ZONE_SPEED * Math.max(windSpeed, 0.5);
+  const speeds: number[] = [];
+  for (let i = 0; i < f.speed.length; i++) {
+    if (f.inside[i]) speeds.push(f.speed[i]);
+  }
+  speeds.sort((a, b) => a - b);
+  const idx = speeds.length ? Math.floor((speeds.length - 1) * HEATMAP_SPEED_PERCENTILE) : 0;
+  const p = speeds.length ? speeds[idx] : threshold;
+  const normMax = Math.max(p, threshold * 2, f.maxSpeed * 0.35, 1e-6);
+  return { normMax, threshold };
 }
 
 // ── Climate / airflow colormaps ────────────────────────────────────────────
@@ -227,6 +243,92 @@ export function drawRoomClimate(
   }
 }
 
+/** Hover readout for the cell under the cursor (live sim views). */
+export function drawCellProbe(
+  ctx: CanvasRenderingContext2D,
+  t: Transform,
+  px: number,
+  py: number,
+  cw: number,
+  ch: number,
+  mode: 'flow' | 'temp' | 'rh',
+  f: FlowField,
+  climate: ClimateSystem,
+  worldX: number,
+  worldY: number,
+  windSpeed: number,
+) {
+  const ix = Math.floor(worldX);
+  const iy = Math.floor(worldY);
+  if (ix < 0 || iy < 0 || ix >= f.nx || iy >= f.ny) return;
+  const i = iy * f.nx + ix;
+  if (!f.inside[i]) return;
+
+  const cellX = wx(t, ix);
+  const cellY = wy(t, iy);
+  const cellS = t.s;
+
+  ctx.save();
+  ctx.strokeStyle = mode === 'flow' ? 'rgba(127, 232, 255, 0.55)' : mode === 'temp' ? 'rgba(255, 216, 168, 0.55)' : 'rgba(168, 216, 255, 0.55)';
+  ctx.lineWidth = Math.max(1.5, cellS * 0.08);
+  ctx.fillStyle = mode === 'flow' ? 'rgba(55, 208, 255, 0.08)' : mode === 'temp' ? 'rgba(255, 209, 102, 0.08)' : 'rgba(127, 200, 255, 0.08)';
+  ctx.fillRect(cellX + 1, cellY + 1, cellS - 2, cellS - 2);
+  ctx.strokeRect(cellX + 1, cellY + 1, cellS - 2, cellS - 2);
+
+  let main: string;
+  let sub: string;
+  let color: string;
+  if (mode === 'flow') {
+    const sp = f.speed[i];
+    const { threshold } = flowSpeedNorm(f, windSpeed);
+    main = sp.toFixed(2);
+    sub = sp < threshold ? 'stagnant' : 'airflow';
+    color = sp < threshold ? 'rgba(200, 215, 235, 0.85)' : '#7fe8ff';
+  } else if (mode === 'temp') {
+    main = `${climate.T[i].toFixed(1)} °C`;
+    sub = 'temperature';
+    color = '#ffd8a8';
+  } else {
+    main = `${climate.RH[i].toFixed(0)}% RH`;
+    sub = 'humidity';
+    color = '#a8d8ff';
+  }
+
+  const padX = 10;
+  const padY = 7;
+  const gap = 2;
+  ctx.font = `600 13px 'Segoe UI', system-ui, sans-serif`;
+  const mainW = ctx.measureText(main).width;
+  ctx.font = `500 10px 'Segoe UI', system-ui, sans-serif`;
+  const subW = ctx.measureText(sub).width;
+  const boxW = Math.max(mainW, subW) + padX * 2;
+  const boxH = 13 + gap + 10 + padY * 2;
+
+  let tx = px + 16;
+  let ty = py + 16;
+  if (tx + boxW > cw - 8) tx = px - boxW - 12;
+  if (ty + boxH > ch - 8) ty = py - boxH - 12;
+  tx = Math.max(8, tx);
+  ty = Math.max(8, ty);
+
+  ctx.fillStyle = 'rgba(8, 12, 18, 0.92)';
+  roundRect(ctx, tx, ty, boxW, boxH, 7);
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(150, 175, 205, 0.35)';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  ctx.font = `600 13px 'Segoe UI', system-ui, sans-serif`;
+  ctx.fillStyle = color;
+  ctx.fillText(main, tx + padX, ty + padY);
+  ctx.font = `500 10px 'Segoe UI', system-ui, sans-serif`;
+  ctx.fillStyle = 'rgba(160, 180, 205, 0.75)';
+  ctx.fillText(sub, tx + padX, ty + padY + 13 + gap);
+  ctx.restore();
+}
+
 function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
   ctx.beginPath();
   ctx.moveTo(x + r, y);
@@ -278,13 +380,42 @@ export function drawClimateLegend(
   }
 }
 
-export function drawGrid(ctx: CanvasRenderingContext2D, t: Transform) {
-  ctx.fillStyle = COL.gridDot;
-  for (let y = 0; y <= GRID_H; y += 2) {
-    for (let x = 0; x <= GRID_W; x += 2) {
-      ctx.fillRect(wx(t, x) - 1, wy(t, y) - 1, 2, 2);
-    }
+export function drawGrid(
+  ctx: CanvasRenderingContext2D,
+  t: Transform,
+  gridOpacity = 0.08,
+  plan?: Plan | null,
+) {
+  ctx.save();
+  ctx.strokeStyle = `rgba(143,163,191,${gridOpacity})`;
+  ctx.lineWidth = 1;
+  for (let x = 0; x <= GRID_W; x++) {
+    ctx.beginPath();
+    ctx.moveTo(wx(t, x), wy(t, 0));
+    ctx.lineTo(wx(t, x), wy(t, GRID_H));
+    ctx.stroke();
   }
+  for (let y = 0; y <= GRID_H; y++) {
+    ctx.beginPath();
+    ctx.moveTo(wx(t, 0), wy(t, y));
+    ctx.lineTo(wx(t, GRID_W), wy(t, y));
+    ctx.stroke();
+  }
+  ctx.strokeStyle = `rgba(255,209,102,${Math.min(0.55, gridOpacity + 0.12)})`;
+  ctx.lineWidth = Math.max(1.5, t.s * 0.06);
+  ctx.strokeRect(wx(t, 0), wy(t, 0), GRID_W * t.s, GRID_H * t.s);
+  if (plan?.rooms.length) {
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const rm of plan.rooms) {
+      x0 = Math.min(x0, rm.x); y0 = Math.min(y0, rm.y);
+      x1 = Math.max(x1, rm.x + rm.w); y1 = Math.max(y1, rm.y + rm.h);
+    }
+    ctx.strokeStyle = 'rgba(127,232,255,0.35)';
+    ctx.setLineDash([4, 4]);
+    ctx.strokeRect(wx(t, x0), wy(t, y0), (x1 - x0) * t.s, (y1 - y0) * t.s);
+    ctx.setLineDash([]);
+  }
+  ctx.restore();
 }
 
 /** Screen-space scale bar at the top of the canvas (metres). */
@@ -349,17 +480,12 @@ export function drawScaleBar(ctx: CanvasRenderingContext2D, t: Transform, cw: nu
 }
 
 export function drawFlowHeatmap(ctx: CanvasRenderingContext2D, t: Transform, f: FlowField, windSpeed: number) {
-  const threshold = DEAD_ZONE_SPEED * Math.max(windSpeed, 0.5);
-  // Normalize against a floor so weak-but-varying rooms still span red→blue.
-  const max = Math.max(f.maxSpeed, threshold * 3, 1e-6);
+  const { normMax } = flowSpeedNorm(f, windSpeed);
   for (let y = 0; y < f.ny; y++) {
     for (let x = 0; x < f.nx; x++) {
       const i = y * f.nx + x;
       if (!f.inside[i]) continue;
-      const sp = f.speed[i];
-      // Continuous scale (dead zones sit at the red end instead of a flat wash).
-      const u = Math.min(sp / (max * 0.75), 1);
-      ctx.fillStyle = flowColor(u, 0.10 + 0.16 * u);
+      ctx.fillStyle = speedColor(f.speed[i], normMax);
       ctx.fillRect(wx(t, x), wy(t, y), t.s + 0.5, t.s + 0.5);
     }
   }
@@ -490,6 +616,27 @@ export function drawOpenings(ctx: CanvasRenderingContext2D, t: Transform, plan: 
     }
     ctx.restore();
   }
+}
+
+import { GRAB_HAND_CLOSED, GRAB_HAND_OPEN } from './grabHand';
+export function drawEmptyCanvasGrabHint(
+  ctx: CanvasRenderingContext2D,
+  px: number,
+  py: number,
+  grabbing: boolean,
+) {
+  ctx.save();
+  ctx.translate(px + 2, py + 2);
+  ctx.scale(0.92, 0.92);
+  const path = new Path2D(grabbing ? GRAB_HAND_CLOSED : GRAB_HAND_OPEN);
+  ctx.fillStyle = 'rgba(8, 12, 18, 0.88)';
+  ctx.fill(path);
+  ctx.strokeStyle = '#e2ecf5';
+  ctx.lineWidth = 2;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.stroke(path);
+  ctx.restore();
 }
 
 export interface LegendHit {
@@ -653,9 +800,15 @@ export function drawCanvasLegend(
   };
 }
 
-export function drawWind(ctx: CanvasRenderingContext2D, t: Transform, plan: Plan, cw: number, ch: number) {
+export function drawWind(
+  ctx: CanvasRenderingContext2D,
+  t: Transform,
+  plan: Plan,
+  cw: number,
+  ch: number,
+  animTimeMs?: number,
+) {
   const wv = windVector(plan.wind);
-  const cyan = COL.streamline; // same accent as sidebar wind dial
   const mobile = isMobileCanvas(cw);
 
   // Ambient wind arrows on the upwind side of the *building* (not the full grid).
@@ -684,8 +837,9 @@ export function drawWind(ctx: CanvasRenderingContext2D, t: Transform, plan: Plan
 
   // Prefer a clear gap from the floorplan; shrink smoothly as the canvas gets tighter.
   const sizeFactor = Math.min(1, Math.min(cw, ch) / (mobile ? 480 : 720));
-  const maxGap = mobile ? 2.2 : 5.5;
-  const minGap = mobile ? 0.55 : 1.15; // stay clear of walls — never cover the plan
+  const maxGap = mobile ? 2.8 : 6.5;
+  const minGap = mobile ? 0.85 : 1.85; // stay clear of walls — never cover the plan
+  const standoffExtra = mobile ? 0.6 : 1.25; // nudge arrows outward from building centre
   const preferredGap = minGap + (maxGap - minGap) * sizeFactor;
   let spacing = mobile ? 2.0 : 4;
   let fan = mobile ? 2 : 3;
@@ -715,8 +869,8 @@ export function drawWind(ctx: CanvasRenderingContext2D, t: Transform, plan: Plan
     return true;
   };
 
-  let standoff = buildExt + preferredGap;
-  const minStandoff = buildExt + minGap;
+  let standoff = buildExt + preferredGap + standoffExtra;
+  const minStandoff = buildExt + minGap + standoffExtra;
 
   // Shrink standoff toward the plan until the fan fits on-screen (desktop resize / narrow canvas).
   if (!arrowFits(standoff, fan, spacing, len)) {
@@ -738,24 +892,43 @@ export function drawWind(ctx: CanvasRenderingContext2D, t: Transform, plan: Plan
   }
 
   ctx.save();
-  ctx.strokeStyle = 'rgba(55,208,255,0.32)';
-  ctx.fillStyle = 'rgba(55,208,255,0.32)';
-  ctx.lineWidth = Math.max(1.5, t.s * 0.1);
   ctx.lineCap = 'round';
   const ax0 = cx - wv.x * standoff;
   const ay0 = cy - wv.y * standoff;
   const perpX = -wv.y, perpY = wv.x;
+  const animated = animTimeMs != null;
+  const flowSpeed = 0.00055 + plan.wind.speed * 0.0001;
+  const travel = len * 2.2;
+
   for (let k = -fan; k <= fan; k++) {
-    const bx = ax0 + perpX * k * spacing;
-    const by = ay0 + perpY * k * spacing;
+    let bx = ax0 + perpX * k * spacing;
+    let by = ay0 + perpY * k * spacing;
+    let alpha = 0.32;
+    if (animated) {
+      const phase = ((animTimeMs! * flowSpeed + (k + fan) * 0.19) % 1 + 1) % 1;
+      bx += wv.x * phase * travel;
+      by += wv.y * phase * travel;
+      alpha = 0.14 + 0.26 * Math.sin(phase * Math.PI);
+    }
+    ctx.strokeStyle = `rgba(55,208,255,${alpha.toFixed(3)})`;
+    ctx.fillStyle = `rgba(55,208,255,${alpha.toFixed(3)})`;
+    ctx.lineWidth = Math.max(1.5, t.s * 0.1);
+    if (animated) {
+      ctx.setLineDash([Math.max(3, head * 0.45), Math.max(2, head * 0.3)]);
+      ctx.lineDashOffset = -animTimeMs! * 0.04 * t.s - k * head * 0.4;
+    } else {
+      ctx.setLineDash([]);
+    }
     arrow(ctx, wx(t, bx), wy(t, by), wx(t, bx + wv.x * len), wy(t, by + wv.y * len), head);
   }
+  ctx.setLineDash([]);
   ctx.restore();
 
   // Compass rose, top-right — match sidebar WindDial proportions (thick shaft + clear tip)
   const R = Math.min(cw, ch) * (mobile ? 0.052 : 0.06);
   const px = cw - R - (mobile ? 10 : 16);
   const py = R + (mobile ? 12 : 16);
+  const compassPulse = animated ? 0.88 + 0.12 * Math.sin(animTimeMs! * 0.004) : 1;
   ctx.save();
   ctx.fillStyle = 'rgba(16,20,26,0.88)';
   ctx.beginPath(); ctx.arc(px, py, R + 8, 0, Math.PI * 2); ctx.fill();
@@ -772,10 +945,15 @@ export function drawWind(ctx: CanvasRenderingContext2D, t: Transform, plan: Plan
   const headBase = R * 0.30;   // along travel, base of triangle
   const headHalfW = R * 0.075; // half-width of triangle
 
-  ctx.strokeStyle = cyan;
-  ctx.fillStyle = cyan;
+  const compassCyan = `rgba(55,208,255,${compassPulse.toFixed(3)})`;
+  ctx.strokeStyle = compassCyan;
+  ctx.fillStyle = compassCyan;
   ctx.lineWidth = Math.max(1.5, R * 0.07);
   ctx.lineCap = 'round';
+  if (animated) {
+    ctx.setLineDash([R * 0.22, R * 0.14]);
+    ctx.lineDashOffset = -animTimeMs! * 0.025;
+  }
   ctx.beginPath();
   ctx.moveTo(fromX, fromY);
   ctx.lineTo(shaftX, shaftY);
@@ -788,6 +966,7 @@ export function drawWind(ctx: CanvasRenderingContext2D, t: Transform, plan: Plan
   ctx.lineTo(px + wv.x * headBase + perpX * headHalfW, py + wv.y * headBase + perpY * headHalfW);
   ctx.closePath();
   ctx.fill();
+  ctx.setLineDash([]);
 
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   ctx.fillStyle = 'rgba(223,232,245,0.95)';

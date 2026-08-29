@@ -1,14 +1,15 @@
 import { useEffect, useRef } from 'react';
 import { useApp } from '../model/store';
 import { GRID_W, GRID_H, Opening, Orient, Plan } from '../model/types';
-import { hitRoomWall, snapCoord, wallLinesX, wallLinesY, overlapsAnyRoom, Side } from '../model/geometry';
-import { solve, scoreField, FlowField } from '../sim/solver';
+import { hitRoomWall, snapCoord, wallLinesX, wallLinesY, overlapsAnyRoom, Side, openingWallSpan } from '../model/geometry';
+import { solve, FlowField, scoreField } from '../sim/solver';
+import { SOLVE_ITER_LIVE, DEFAULT_WINDOW_LEN, DEFAULT_DOOR_LEN } from '../sim/constants';
 import { ParticleSystem } from '../sim/particles';
 import { ClimateSystem } from '../sim/climate';
 import {
   editorTransform, editorBaseScale, editorFrameBounds, toWorld, wx, wy, COL, DEFAULT_VIEW,
   drawGrid, drawScaleBar, drawFlowHeatmap, drawRooms, drawOpenings, drawWind, drawParticles,
-  drawClimateHeatmap, drawRoomClimate, drawClimateLegend, drawCanvasLegend, legendHitTest, isMobileCanvas,
+  drawClimateHeatmap, drawRoomClimate, drawClimateLegend, drawCanvasLegend, drawEmptyCanvasGrabHint, drawCellProbe, legendHitTest, isMobileCanvas,
   type ViewState, type LegendHit,
 } from './render';
 
@@ -19,6 +20,8 @@ interface OpeningPreview { orient: Orient; x: number; y: number; len: number; va
 const EDITOR_PAD = 0.02;
 /** World-cell distance before a press becomes a drag (select stays a click under this). */
 const DRAG_THRESH = 0.35;
+/** Screen pixels before an empty-canvas press becomes a view pan. */
+const PAN_DRAG_PX = 6;
 /** Hold this long on an opening to select it (yellow ring) and allow dragging. */
 const OPENING_LONG_PRESS_MS = 200;
 const VIEW_ZOOM_MIN = 0.75;
@@ -26,24 +29,31 @@ const VIEW_ZOOM_MAX = 5;
 
 /**
  * Pending press. Rooms: click selects, drag moves.
- * Openings: short click toggles open/closed; long-press arms selection + drag.
+ * Openings: short click anywhere toggles open/closed; long-press selects.
+ * Drag on body (when selected or after long-press) moves along the wall.
+ * Drag on centre glyph when selected resizes span.
  */
 interface Press {
   sx: number; sy: number;
   target:
     | { kind: 'room'; id: string; offX: number; offY: number }
-    | { kind: 'opening'; id: string };
+    | { kind: 'opening'; id: string; onGlyph: boolean };
   timer?: ReturnType<typeof setTimeout>;
-  /** Opening long-press completed (or already selected) → ready to drag. */
+  /** Long-press completed → ready to drag (move). */
   armed?: boolean;
-  /** Opening was already selected at pointerdown. */
-  wasSelected?: boolean;
+  /** Selected at pointerdown, or long-press finished — drag may start immediately. */
+  canDrag?: boolean;
+  /** Selected opening + centre glyph → drag resizes. */
+  resizeMode?: boolean;
+  /** Pointer moved before long-press armed (suppress accidental toggle). */
+  moved?: boolean;
 }
 
 type DragMode =
   | { kind: 'move'; roomId: string; offX: number; offY: number; gx: number; gy: number }
   | { kind: 'resize'; roomId: string; side: Side; pos: number }
-  | { kind: 'opening'; id: string; preview: OpeningPreview | null };
+  | { kind: 'opening'; id: string; preview: OpeningPreview | null }
+  | { kind: 'openingResize'; id: string; len: number };
 
 /** Find the nearest wall edge to a world point; returns a candidate opening placement. */
 function findWallPlacement(
@@ -90,22 +100,44 @@ function openingPreviewAt(plan: Plan, wxp: number, wyp: number, len: number, exc
   };
 }
 
-/** Hit-test an opening's glyph / segment. */
-function hitOpening(plan: Plan, wxp: number, wyp: number): Opening | null {
+/** Hit-test an opening's wall segment or glyph (scale = world cells per screen pixel). */
+function hitOpening(plan: Plan, wxp: number, wyp: number, scale = 1): Opening | null {
+  const maxDist = Math.max(1.35, 14 / Math.max(scale, 0.5));
   let best: Opening | null = null;
-  let bestD = 0.9;
+  let bestD = maxDist;
   for (const o of plan.openings) {
     let d: number;
+    const cx = o.orient === 'h' ? o.x + o.len / 2 : o.x;
+    const cy = o.orient === 'h' ? o.y : o.y + o.len / 2;
     if (o.orient === 'h') {
       const clx = Math.max(o.x, Math.min(wxp, o.x + o.len));
-      d = Math.hypot(wxp - clx, wyp - o.y);
+      d = Math.min(Math.hypot(wxp - clx, wyp - o.y), Math.hypot(wxp - cx, wyp - cy));
     } else {
       const cly = Math.max(o.y, Math.min(wyp, o.y + o.len));
-      d = Math.hypot(wxp - o.x, wyp - cly);
+      d = Math.min(Math.hypot(wxp - o.x, wyp - cly), Math.hypot(wxp - cx, wyp - cy));
     }
     if (d < bestD) { bestD = d; best = o; }
   }
   return best;
+}
+
+/** Hit-test the centre glyph of an opening (resize handle). */
+function hitOpeningGlyph(plan: Plan, wxp: number, wyp: number, scale = 1): Opening | null {
+  const maxDist = Math.max(0.45, 14 / Math.max(scale, 0.5));
+  for (const o of plan.openings) {
+    const cx = o.orient === 'h' ? o.x + o.len / 2 : o.x;
+    const cy = o.orient === 'h' ? o.y : o.y + o.len / 2;
+    if (Math.hypot(wxp - cx, wyp - cy) <= maxDist) return o;
+  }
+  return null;
+}
+
+/** Hit-test an opening wall segment, excluding the centre glyph. */
+function hitOpeningBody(plan: Plan, wxp: number, wyp: number, scale = 1): Opening | null {
+  const op = hitOpening(plan, wxp, wyp, scale);
+  if (!op) return null;
+  if (hitOpeningGlyph(plan, wxp, wyp, scale)?.id === op.id) return null;
+  return op;
 }
 
 function hitRoom(plan: Plan, wxp: number, wyp: number) {
@@ -116,6 +148,11 @@ function hitRoom(plan: Plan, wxp: number, wyp: number) {
   return null;
 }
 
+/** Pointer is over a room interior or near an opening — floorplan tools, not canvas pan. */
+function isFloorplanContent(plan: Plan, wxp: number, wyp: number, scale = 1) {
+  return hitOpening(plan, wxp, wyp, scale) != null || hitRoom(plan, wxp, wyp) != null;
+}
+
 export default function EditorCanvas() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const fieldRef = useRef<FlowField | null>(null);
@@ -124,6 +161,7 @@ export default function EditorCanvas() {
   const dragRef = useRef<DragRect | null>(null);
   const previewRef = useRef<OpeningPreview | null>(null);
   const mouseRef = useRef<{ x: number; y: number } | null>(null);
+  const mouseScreenRef = useRef<{ x: number; y: number } | null>(null);
   const pressRef = useRef<Press | null>(null);
   const dragModeRef = useRef<DragMode | null>(null);
   const viewRef = useRef<ViewState>({ ...DEFAULT_VIEW });
@@ -136,6 +174,10 @@ export default function EditorCanvas() {
   } | null>(null);
   /** After a pinch, ignore the leftover pointer-up so we don't toggle openings. */
   const gestureSuppressRef = useRef(false);
+  /** Active view pan (screen coords). */
+  const viewPanRef = useRef<{ startX: number; startY: number; panX: number; panY: number } | null>(null);
+  /** Empty-canvas press waiting to become a pan (floorplan hits never set this). */
+  const pendingPanRef = useRef<{ startX: number; startY: number; panX: number; panY: number } | null>(null);
   /** Mobile colour-legend popover (collapsed to icon by default). */
   const legendOpenRef = useRef(false);
   const legendHitRef = useRef<LegendHit | null>(null);
@@ -146,10 +188,11 @@ export default function EditorCanvas() {
   const selectedId = useApp(s => s.selectedId);
   const simRunning = useApp(s => s.simRunning);
   const viewMode = useApp(s => s.viewMode);
+  const gridOpacity = useApp(s => s.gridOpacity);
 
   // Keep latest values available inside the rAF loop without re-subscribing.
-  const stateRef = useRef({ plan, tool, selectedId, simRunning, viewMode });
-  stateRef.current = { plan, tool, selectedId, simRunning, viewMode };
+  const stateRef = useRef({ plan, tool, selectedId, simRunning, viewMode, gridOpacity });
+  stateRef.current = { plan, tool, selectedId, simRunning, viewMode, gridOpacity };
 
   // Switching tools cancels in-progress select drags and refreshes the placement ghost.
   useEffect(() => {
@@ -157,13 +200,9 @@ export default function EditorCanvas() {
     pressRef.current = null;
     dragModeRef.current = null;
     dragRef.current = null;
-    const canvas = canvasRef.current;
-    if (canvas) {
-      canvas.style.cursor = tool === 'select' ? 'default' : 'crosshair';
-    }
     const m = mouseRef.current;
     if (m && (tool === 'window' || tool === 'door')) {
-      previewRef.current = openingPreviewAt(useApp.getState().plan, m.x, m.y, 2);
+      previewRef.current = openingPreviewAt(useApp.getState().plan, m.x, m.y, tool === 'door' ? DEFAULT_DOOR_LEN : DEFAULT_WINDOW_LEN);
     } else {
       previewRef.current = null;
     }
@@ -175,14 +214,13 @@ export default function EditorCanvas() {
     const id = setTimeout(() => {
       if (cancelled) return;
       const t0 = performance.now();
-      const f = solve(useApp.getState().plan);
+      const planNow = useApp.getState().plan;
+      const f = solve(planNow, { iterations: SOLVE_ITER_LIVE });
       fieldRef.current = f;
       particlesRef.current.setField(f);
-      climateRef.current.setField(f, useApp.getState().plan.env);
-      const s = scoreField(f, useApp.getState().plan.wind.speed, useApp.getState().plan.rooms);
-      useApp.getState().setScoreLabel(
-        `Ventilated area: ${(s.coverage * 100).toFixed(0)}%  ·  mean airflow ${(s.meanSpeed).toFixed(2)}  ·  solve ${(performance.now() - t0).toFixed(0)} ms`,
-      );
+      climateRef.current.setField(f, planNow.env);
+      const sc = scoreField(f, planNow.wind.speed, planNow.rooms);
+      useApp.getState().publishFlowResults(f, sc, performance.now() - t0);
     }, 60);
     return () => { cancelled = true; clearTimeout(id); };
   }, [rev]);
@@ -209,7 +247,7 @@ export default function EditorCanvas() {
     const frame = (now: number) => {
       const dt = Math.min((now - last) / 1000, 0.1);
       last = now;
-      const { plan, tool, selectedId, simRunning, viewMode } = stateRef.current;
+      const { plan, tool, selectedId, simRunning, viewMode, gridOpacity } = stateRef.current;
       const f = fieldRef.current;
 
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -219,7 +257,7 @@ export default function EditorCanvas() {
 
       ctx.fillStyle = COL.bg;
       ctx.fillRect(0, 0, cw, ch);
-      drawGrid(ctx, t);
+      drawGrid(ctx, t, gridOpacity, plan);
       drawScaleBar(ctx, t, cw);
 
       // Climate always evolves while the sim runs, whatever the view.
@@ -232,7 +270,7 @@ export default function EditorCanvas() {
         else drawClimateHeatmap(ctx, t, f, climateRef.current, viewMode, plan);
       }
       drawOpenings(ctx, t, plan, selectedId);
-      drawWind(ctx, t, plan, cw, ch);
+      drawWind(ctx, t, plan, cw, ch, now);
 
       if (f && simRunning) {
         particlesRef.current.step(dt);
@@ -275,7 +313,25 @@ export default function EditorCanvas() {
             ctx.fillRect(wx(t, x), wy(t, y), w * t.s, h * t.s);
             ctx.strokeRect(wx(t, x), wy(t, y), w * t.s, h * t.s);
           }
-        } else if (dm.preview) {
+        } else if (dm.kind === 'openingResize') {
+          const op = plan.openings.find(o => o.id === dm.id);
+          if (op) {
+            ctx.setLineDash([]);
+            ctx.strokeStyle = COL.selected;
+            ctx.lineWidth = Math.max(3, t.s * 0.34);
+            ctx.lineCap = 'round';
+            ctx.globalAlpha = 0.9;
+            ctx.beginPath();
+            if (op.orient === 'h') {
+              ctx.moveTo(wx(t, op.x), wy(t, op.y));
+              ctx.lineTo(wx(t, op.x + dm.len), wy(t, op.y));
+            } else {
+              ctx.moveTo(wx(t, op.x), wy(t, op.y));
+              ctx.lineTo(wx(t, op.x), wy(t, op.y + dm.len));
+            }
+            ctx.stroke();
+          }
+        } else if (dm.kind === 'opening' && dm.preview) {
           ctx.setLineDash([]);
           ctx.strokeStyle = dm.preview.valid ? COL.wallSelected : COL.windowClosed;
           ctx.lineWidth = Math.max(3, t.s * 0.3);
@@ -294,17 +350,17 @@ export default function EditorCanvas() {
         ctx.restore();
       }
 
-      // drawing-in-progress room rect
-      const dr = dragRef.current;
+const dr = dragRef.current;
       if (dr) {
         const x = Math.min(dr.x0, dr.x1), y = Math.min(dr.y0, dr.y1);
         const w = Math.abs(dr.x1 - dr.x0), h = Math.abs(dr.y1 - dr.y0);
-        ctx.strokeStyle = COL.wallSelected;
+        const bad = w >= 2 && h >= 2 && overlapsAnyRoom(plan, { x, y, w, h });
+        ctx.strokeStyle = bad ? COL.windowClosed : COL.wallSelected;
         ctx.setLineDash([6, 4]);
         ctx.lineWidth = 2;
         ctx.strokeRect(wx(t, x), wy(t, y), w * t.s, h * t.s);
         ctx.setLineDash([]);
-        ctx.fillStyle = 'rgba(255,209,102,0.08)';
+        ctx.fillStyle = bad ? 'rgba(255,93,108,0.12)' : 'rgba(255,209,102,0.08)';
         ctx.fillRect(wx(t, x), wy(t, y), w * t.s, h * t.s);
       }
 
@@ -337,6 +393,7 @@ export default function EditorCanvas() {
 
       // room tool: show snap point + starter footprint under the cursor
       const mouse = mouseRef.current;
+      const mouseScreen = mouseScreenRef.current;
       if (tool === 'room' && mouse && !dragRef.current) {
         const gx = Math.round(Math.max(0, Math.min(mouse.x, GRID_W)));
         const gy = Math.round(Math.max(0, Math.min(mouse.y, GRID_H)));
@@ -359,26 +416,6 @@ export default function EditorCanvas() {
         ctx.restore();
       }
 
-      // bright tool cursor halo so the pointer stays visible on the dark canvas
-      if (mouse && tool !== 'select') {
-        const mx = wx(t, mouse.x), my = wy(t, mouse.y);
-        ctx.save();
-        ctx.strokeStyle = tool === 'erase' ? COL.windowClosed
-          : tool === 'window' ? COL.windowOpen
-          : tool === 'door' ? COL.doorOpen
-          : COL.wallSelected;
-        ctx.lineWidth = 1.5;
-        ctx.globalAlpha = 0.9;
-        ctx.beginPath();
-        ctx.arc(mx, my, 10, 0, Math.PI * 2);
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.moveTo(mx - 14, my); ctx.lineTo(mx + 14, my);
-        ctx.moveTo(mx, my - 14); ctx.lineTo(mx, my + 14);
-        ctx.stroke();
-        ctx.restore();
-      }
-
       // empty-state hint
       if (plan.rooms.length === 0) {
         ctx.fillStyle = 'rgba(200,215,235,0.5)';
@@ -386,6 +423,28 @@ export default function EditorCanvas() {
         ctx.textAlign = 'center';
         ctx.fillText('Pick the Room tool and drag to draw your first room —', cw / 2, ch / 2 - 12);
         ctx.fillText('or load the sample apartment from the sidebar.', cw / 2, ch / 2 + 12);
+      }
+
+      // Hover cell probe (live sim values beside cursor).
+      if (f && simRunning && mouse && mouseScreen) {
+        drawCellProbe(
+          ctx, t, mouseScreen.x, mouseScreen.y, cw, ch,
+          viewMode, f, climateRef.current, mouse.x, mouse.y, plan.wind.speed,
+        );
+      }
+
+      // Visible grab hand on empty canvas (OS grab cursor disappears on dark bg).
+      if (mouse) {
+        const st = stateRef.current;
+        const onEmpty = !isFloorplanContent(st.plan, mouse.x, mouse.y, t.s);
+        if (onEmpty && st.tool !== 'room') {
+          drawEmptyCanvasGrabHint(
+            ctx,
+            wx(t, mouse.x),
+            wy(t, mouse.y),
+            viewPanRef.current != null,
+          );
+        }
       }
 
       // Always on top so particles / ghosts never hide it.
@@ -442,6 +501,38 @@ export default function EditorCanvas() {
       pressRef.current = null;
       dragModeRef.current = null;
       dragRef.current = null;
+      viewPanRef.current = null;
+      pendingPanRef.current = null;
+    };
+
+    const applyViewPan = (sp: { x: number; y: number }) => {
+      const p = viewPanRef.current;
+      if (!p) return;
+      viewRef.current.panX = p.panX + (sp.x - p.startX);
+      viewRef.current.panY = p.panY + (sp.y - p.startY);
+    };
+
+    const promotePendingPan = (sp: { x: number; y: number }) => {
+      const pending = pendingPanRef.current;
+      if (!pending || viewPanRef.current || pressRef.current || dragModeRef.current || dragRef.current) return false;
+      if (Math.hypot(sp.x - pending.startX, sp.y - pending.startY) < PAN_DRAG_PX) return false;
+      pendingPanRef.current = null;
+      viewPanRef.current = {
+        startX: pending.startX,
+        startY: pending.startY,
+        panX: pending.panX,
+        panY: pending.panY,
+      };
+      return true;
+    };
+
+    const beginEmptyCanvasPan = (sp: { x: number; y: number }) => {
+      pendingPanRef.current = {
+        startX: sp.x,
+        startY: sp.y,
+        panX: viewRef.current.panX,
+        panY: viewRef.current.panY,
+      };
     };
 
     const applyPinch = () => {
@@ -452,7 +543,17 @@ export default function EditorCanvas() {
       const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
       const { startDist, startZoom, worldMid } = pinchRef.current;
       const zoom = Math.max(VIEW_ZOOM_MIN, Math.min(VIEW_ZOOM_MAX, startZoom * (dist / startDist)));
-      setViewAround(zoom, mid.x, mid.y, worldMid);
+      const { cw, ch } = canvasSize();
+      const plan = stateRef.current.plan;
+      const s = editorBaseScale(cw, ch, EDITOR_PAD, plan) * zoom;
+      const { x0, y0, x1, y1 } = editorFrameBounds(cw, plan);
+      const bw = Math.max(1, x1 - x0);
+      const bh = Math.max(1, y1 - y0);
+      viewRef.current = {
+        zoom,
+        panX: mid.x - (cw - bw * s) / 2 + x0 * s - worldMid.x * s,
+        panY: mid.y - (ch - bh * s) / 2 + y0 * s - worldMid.y * s,
+      };
     };
 
     const startPinch = () => {
@@ -473,7 +574,7 @@ export default function EditorCanvas() {
     const refreshPlacementPreview = (w: { x: number; y: number }) => {
       const { plan, tool } = stateRef.current;
       if (tool === 'window' || tool === 'door') {
-        previewRef.current = openingPreviewAt(plan, w.x, w.y, 2);
+        previewRef.current = openingPreviewAt(plan, w.x, w.y, tool === 'door' ? DEFAULT_DOOR_LEN : DEFAULT_WINDOW_LEN);
       } else {
         previewRef.current = null;
       }
@@ -509,49 +610,73 @@ export default function EditorCanvas() {
       const { plan, tool, selectedId } = stateRef.current;
       const st = useApp.getState();
       const w = worldPos(e);
+      const scale = currentTransform().s;
+      const onFloorplan = isFloorplanContent(plan, w.x, w.y, scale);
 
-      if (tool === 'room') {
-        const gx = Math.round(Math.max(0, Math.min(w.x, GRID_W)));
-        const gy = Math.round(Math.max(0, Math.min(w.y, GRID_H)));
-        dragRef.current = { x0: gx, y0: gy, x1: gx, y1: gy };
-      } else if (tool === 'window' || tool === 'door') {
-        const len = 2;
-        const pv = findWallPlacement(plan, w.x, w.y, len);
-        if (pv && pv.valid) {
-          st.addOpening({ kind: tool, orient: pv.orient, x: pv.x, y: pv.y, len: pv.len, open: true });
-        }
-      } else if (tool === 'erase') {
-        const op = hitOpening(plan, w.x, w.y);
-        if (op) { st.deleteOpening(op.id); return; }
-        const rm = hitRoom(plan, w.x, w.y);
-        if (rm) st.deleteRoom(rm.id);
-      } else {
-        // Select tool:
-        //  - Opening short-click = open/close (green/red)
-        //  - Opening long-press (~200 ms) = select (yellow ring) + drag along walls
-        //  - Room click = select; drag from interior = move; wall drag = resize
-        const op = hitOpening(plan, w.x, w.y);
-        if (op) {
+      if (e.button === 1) {
+        cancelToolGesture();
+        viewPanRef.current = {
+          startX: sp.x,
+          startY: sp.y,
+          panX: viewRef.current.panX,
+          panY: viewRef.current.panY,
+        };
+        e.preventDefault();
+        return;
+      }
+
+      // ── Floorplan content: rooms & openings (never start canvas pan) ──
+      if (e.button === 0 && onFloorplan) {
+        const op = tool === 'select' ? hitOpening(plan, w.x, w.y, scale) : hitOpening(plan, w.x, w.y, scale);
+
+        if (tool === 'select' && op) {
+          const onGlyph = hitOpeningGlyph(plan, w.x, w.y, scale)?.id === op.id;
           const alreadySelected = selectedId === op.id;
+
           pressRef.current = {
             sx: w.x, sy: w.y,
-            target: { kind: 'opening', id: op.id },
-            armed: alreadySelected,
-            wasSelected: alreadySelected,
+            target: { kind: 'opening', id: op.id, onGlyph },
+            canDrag: alreadySelected,
+            resizeMode: alreadySelected && onGlyph,
             timer: alreadySelected ? undefined : setTimeout(() => {
               const p = pressRef.current;
               if (!p || p.target.kind !== 'opening' || p.target.id !== op.id) return;
               p.armed = true;
+              p.canDrag = true;
               useApp.getState().setSelected(op.id);
             }, OPENING_LONG_PRESS_MS),
           };
           return;
         }
-        // Wall of the already-selected room → resize (takes priority over interior move).
+
+        if (tool === 'room') {
+          const gx = Math.round(Math.max(0, Math.min(w.x, GRID_W)));
+          const gy = Math.round(Math.max(0, Math.min(w.y, GRID_H)));
+          dragRef.current = { x0: gx, y0: gy, x1: gx, y1: gy };
+          return;
+        }
+
+        if ((tool === 'window' || tool === 'door') && !op) {
+          const len = tool === 'door' ? DEFAULT_DOOR_LEN : DEFAULT_WINDOW_LEN;
+          const pv = findWallPlacement(plan, w.x, w.y, len);
+          if (pv && pv.valid) {
+            st.addOpening({ kind: tool, orient: pv.orient, x: pv.x, y: pv.y, len: pv.len, open: true });
+          }
+          return;
+        }
+
+        if (tool === 'erase') {
+          if (op) { st.deleteOpening(op.id); return; }
+          const rm = hitRoom(plan, w.x, w.y);
+          if (rm) st.deleteRoom(rm.id);
+          return;
+        }
+
+        // Select on rooms / walls
         const selRoom = plan.rooms.find(r => r.id === selectedId);
         if (selRoom) {
           const side = hitRoomWall(selRoom, w.x, w.y);
-          if (side) {
+          if (side && !op) {
             dragModeRef.current = {
               kind: 'resize', roomId: selRoom.id, side,
               pos: side === 'w' ? selRoom.x : side === 'e' ? selRoom.x + selRoom.w : side === 'n' ? selRoom.y : selRoom.y + selRoom.h,
@@ -562,33 +687,67 @@ export default function EditorCanvas() {
         const rm = hitRoom(plan, w.x, w.y);
         if (rm) {
           st.setSelected(rm.id);
-          // Drag from interior moves the room (after / including this selection).
           pressRef.current = {
             sx: w.x, sy: w.y,
             target: { kind: 'room', id: rm.id, offX: w.x - rm.x, offY: w.y - rm.y },
           };
           return;
         }
-        st.setSelected(null);
-        pressRef.current = null;
+        return;
+      }
+
+      // ── Empty canvas: pan on drag (room tool draws here instead) ──
+      if (e.button === 0 && !onFloorplan) {
+        if (tool === 'room') {
+          const gx = Math.round(Math.max(0, Math.min(w.x, GRID_W)));
+          const gy = Math.round(Math.max(0, Math.min(w.y, GRID_H)));
+          dragRef.current = { x0: gx, y0: gy, x1: gx, y1: gy };
+        } else {
+          beginEmptyCanvasPan(sp);
+        }
       }
     };
 
     const updateCursor = (w: { x: number; y: number }) => {
       const { plan, tool, selectedId } = stateRef.current;
-      let cur = 'crosshair';
+      const scale = currentTransform().s;
+      const onFloorplan = isFloorplanContent(plan, w.x, w.y, scale);
+      if (viewPanRef.current) {
+        canvas.style.cursor = onFloorplan ? 'grabbing' : 'none';
+        return;
+      }
+      let cur = tool === 'room' ? 'crosshair' : onFloorplan ? 'pointer' : 'grab';
       if (tool === 'select') {
-        cur = 'default';
         if (dragModeRef.current) {
           const dm = dragModeRef.current;
-          cur = dm.kind === 'resize' ? (dm.side === 'e' || dm.side === 'w' ? 'ew-resize' : 'ns-resize') : 'grabbing';
-        } else {
+          if (dm.kind === 'resize' || dm.kind === 'openingResize') {
+            const op = dm.kind === 'openingResize'
+              ? plan.openings.find(o => o.id === dm.id)
+              : null;
+            cur = op?.orient === 'v' || (dm.kind === 'resize' && (dm.side === 'n' || dm.side === 's'))
+              ? 'ns-resize' : 'ew-resize';
+          } else {
+            cur = 'grabbing';
+          }
+        } else if (onFloorplan) {
+          const selOpening = plan.openings.find(o => o.id === selectedId);
+          const onGlyph = hitOpeningGlyph(plan, w.x, w.y, scale);
           const selRoom = plan.rooms.find(r => r.id === selectedId);
           const side = selRoom ? hitRoomWall(selRoom, w.x, w.y) : null;
-          if (side && !hitOpening(plan, w.x, w.y)) cur = side === 'e' || side === 'w' ? 'ew-resize' : 'ns-resize';
-          else if (hitOpening(plan, w.x, w.y)) cur = 'pointer';
+          if (onGlyph && selOpening && onGlyph.id === selOpening.id) {
+            cur = selOpening.orient === 'h' ? 'ew-resize' : 'ns-resize';
+          } else if (side && !hitOpening(plan, w.x, w.y, scale)) {
+            cur = side === 'e' || side === 'w' ? 'ew-resize' : 'ns-resize';
+          } else if (hitOpening(plan, w.x, w.y, scale)) cur = 'pointer';
           else if (hitRoom(plan, w.x, w.y)) cur = selectedId && hitRoom(plan, w.x, w.y)?.id === selectedId ? 'grab' : 'pointer';
+        } else {
+          cur = 'grab';
         }
+      } else if (tool !== 'room' && onFloorplan) {
+        cur = 'crosshair';
+      }
+      if (!onFloorplan && tool !== 'room' && (cur === 'grab' || cur === 'grabbing')) {
+        cur = 'none';
       }
       canvas.style.cursor = cur;
     };
@@ -606,6 +765,9 @@ export default function EditorCanvas() {
           gx: room.x,
           gy: room.y,
         };
+      } else if (press.resizeMode) {
+        const op = plan.openings.find(o => o.id === press.target.id);
+        dragModeRef.current = { kind: 'openingResize', id: press.target.id, len: op?.len ?? 1 };
       } else {
         dragModeRef.current = { kind: 'opening', id: press.target.id, preview: null };
       }
@@ -626,6 +788,13 @@ export default function EditorCanvas() {
       } else if (dm?.kind === 'opening') {
         const op = plan.openings.find(o => o.id === dm.id);
         dm.preview = op ? findWallPlacement(plan, w.x, w.y, op.len, op.id) : null;
+      } else if (dm?.kind === 'openingResize') {
+        const op = plan.openings.find(o => o.id === dm.id);
+        if (op) {
+          const maxLen = openingWallSpan(plan, op);
+          const raw = op.orient === 'h' ? w.x - op.x : w.y - op.y;
+          dm.len = Math.max(1, Math.min(maxLen, Math.round(raw)));
+        }
       }
     };
 
@@ -644,9 +813,24 @@ export default function EditorCanvas() {
       if (pinchRef.current) return;
       if (gestureSuppressRef.current) return;
 
+      const sp = screenPos(e);
+      if (promotePendingPan(sp)) {
+        canvas.style.cursor = 'none';
+        e.preventDefault();
+      }
+      if (viewPanRef.current) {
+        applyViewPan(sp);
+        canvas.style.cursor = isFloorplanContent(stateRef.current.plan, worldPos(e).x, worldPos(e).y, currentTransform().s)
+          ? 'grabbing' : 'none';
+        e.preventDefault();
+        return;
+      }
+
       const { plan, tool } = stateRef.current;
       const w = worldPos(e);
+      const scale = currentTransform().s;
       mouseRef.current = w;
+      mouseScreenRef.current = screenPos(e);
 
       // Stale select-drag must not block placement tools after a sidebar tool switch.
       if (tool !== 'select' && (dragModeRef.current || pressRef.current)) {
@@ -658,10 +842,10 @@ export default function EditorCanvas() {
       // Pending press → drag once the pointer travels enough.
       if (tool === 'select' && pressRef.current && Math.hypot(w.x - pressRef.current.sx, w.y - pressRef.current.sy) > DRAG_THRESH) {
         const press = pressRef.current;
-        if (press.target.kind === 'opening' && !press.armed) {
-          // Moved before long-press armed → cancel (don't toggle, don't drag).
+        if (press.target.kind === 'opening' && !press.canDrag && !press.armed) {
           if (press.timer) clearTimeout(press.timer);
-          pressRef.current = null;
+          press.timer = undefined;
+          press.moved = true;
         } else {
           if (press.timer) clearTimeout(press.timer);
           beginPressDrag(press, w);
@@ -686,9 +870,16 @@ export default function EditorCanvas() {
           const raw = dm.side === 'e' || dm.side === 'w' ? w.x : w.y;
           const cands = dm.side === 'e' || dm.side === 'w' ? wallLinesX(plan, dm.roomId) : wallLinesY(plan, dm.roomId);
           dm.pos = snapCoord(cands, raw) ?? Math.round(raw);
-        } else {
+        } else if (dm.kind === 'opening') {
           const op = plan.openings.find(o => o.id === dm.id);
           dm.preview = op ? findWallPlacement(plan, w.x, w.y, op.len, op.id) : null;
+        } else if (dm.kind === 'openingResize') {
+          const op = plan.openings.find(o => o.id === dm.id);
+          if (op) {
+            const maxLen = openingWallSpan(plan, op);
+            const raw = op.orient === 'h' ? w.x - op.x : w.y - op.y;
+            dm.len = Math.max(1, Math.min(maxLen, Math.round(raw)));
+          }
         }
         updateCursor(w);
         return;
@@ -705,11 +896,13 @@ export default function EditorCanvas() {
     const onEnter = (e: PointerEvent) => {
       const w = worldPos(e);
       mouseRef.current = w;
+      mouseScreenRef.current = screenPos(e);
       refreshPlacementPreview(w);
       updateCursor(w);
     };
 
     const onLeave = () => {
+      mouseScreenRef.current = null;
       // Keep last mouse for tool-switch refresh, but hide floating ghosts off-canvas.
       if (stateRef.current.tool !== 'select') {
         previewRef.current = null;
@@ -722,6 +915,7 @@ export default function EditorCanvas() {
       if (pointersRef.current.size < 2) {
         pinchRef.current = null;
       }
+      viewPanRef.current = null;
       if (gestureSuppressRef.current) {
         if (pointersRef.current.size === 0) gestureSuppressRef.current = false;
         return;
@@ -737,7 +931,10 @@ export default function EditorCanvas() {
         pressRef.current = null;
         if (dm.kind === 'move') st.moveRoom(dm.roomId, dm.gx, dm.gy);
         else if (dm.kind === 'resize') st.resizeRoom(dm.roomId, dm.side, dm.pos);
-        else if (dm.preview?.valid) st.moveOpening(dm.id, dm.preview.orient, dm.preview.x, dm.preview.y);
+        else if (dm.kind === 'openingResize') st.setOpeningLen(dm.id, dm.len);
+        else if (dm.kind === 'opening' && dm.preview?.valid) {
+          st.moveOpening(dm.id, dm.preview.orient, dm.preview.x, dm.preview.y);
+        }
         return;
       }
 
@@ -747,19 +944,27 @@ export default function EditorCanvas() {
         if (press.timer) clearTimeout(press.timer);
         pressRef.current = null;
         if (press.target.kind === 'opening') {
-          if (!press.armed) {
-            // Short click: toggle open/closed — keep green/red, do not select.
+          const dist = Math.hypot(
+            worldPos(e).x - press.sx,
+            worldPos(e).y - press.sy,
+          );
+          const shortClick = dist <= DRAG_THRESH;
+          if (press.moved && !press.armed && !press.canDrag) {
+            // Dragged before long-press finished — no action.
+          } else if (shortClick && !press.armed) {
+            // Short click anywhere on the fixture toggles open/closed.
             st.toggleOpening(press.target.id);
             if (st.selectedId === press.target.id) st.setSelected(null);
-          } else if (press.wasSelected) {
-            // Already selected + short click (no drag): still toggle open/closed.
-            st.toggleOpening(press.target.id);
-          } else {
-            // Fresh long-press without move: stay selected for sidebar / next drag.
-            st.setSelected(press.target.id);
           }
+          // Long-press release without drag: selection already set in timer; no toggle.
         }
         // Room short-click already selected on down.
+        return;
+      }
+
+      if (pendingPanRef.current) {
+        if (stateRef.current.tool === 'select') st.setSelected(null);
+        pendingPanRef.current = null;
         return;
       }
 
@@ -773,11 +978,11 @@ export default function EditorCanvas() {
     };
 
     const onWheel = (e: WheelEvent) => {
-      // Pinch-to-zoom on trackpads sends ctrl+wheel; also allow plain wheel over the canvas.
       e.preventDefault();
       const { rect } = canvasSize();
       const mx = e.clientX - rect.left;
       const my = e.clientY - rect.top;
+
       const before = currentTransform();
       const world = toWorld(before, mx, my);
       const factor = Math.exp(-e.deltaY * 0.0015);
@@ -786,9 +991,10 @@ export default function EditorCanvas() {
     };
 
     const onKey = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName;
+      const inField = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
       if (e.key === 'Delete' || e.key === 'Backspace') {
-        const tag = (e.target as HTMLElement)?.tagName;
-        if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+        if (inField) return;
         const st = useApp.getState();
         const id = st.selectedId;
         if (!id) return;
@@ -799,6 +1005,8 @@ export default function EditorCanvas() {
       if (e.key === 'Escape') {
         dragRef.current = null;
         dragModeRef.current = null;
+        viewPanRef.current = null;
+        pendingPanRef.current = null;
         if (pressRef.current?.timer) clearTimeout(pressRef.current.timer);
         pressRef.current = null;
         useApp.getState().setSelected(null);

@@ -5,6 +5,8 @@
 
 import { Plan, CELL_METERS, GRID_W, GRID_H } from '../model/types';
 import { solve, scoreField } from '../sim/solver';
+import { SOLVE_ITER_EXPORT } from '../sim/constants';
+import { dirName } from '../lib/format';
 import {
   fitTransform, COL, drawGrid, drawFlowHeatmap, drawRooms, drawOpenings,
   drawWind, drawStreamlines,
@@ -17,7 +19,7 @@ export function exportPNG(plan: Plan) {
   const ctx = canvas.getContext('2d')!;
 
   // High-quality solve for the export.
-  const field = solve(plan, { iterations: 900 });
+  const field = solve(plan, { iterations: SOLVE_ITER_EXPORT });
   const s = scoreField(field, plan.wind.speed, plan.rooms);
 
   ctx.fillStyle = COL.bg;
@@ -70,7 +72,7 @@ export function exportPNG(plan: Plan) {
   ctx.fillStyle = 'rgba(140,160,185,0.55)';
   ctx.textAlign = 'right';
   ctx.font = `400 19px 'Segoe UI', system-ui, sans-serif`;
-  ctx.fillText(`grid: 1 cell = ${CELL_METERS} m  ·  plan ${GRID_W * CELL_METERS}×${GRID_H * CELL_METERS} m  ·  made with Airflow Simulator`, W - 40, H - 30);
+  ctx.fillText(`grid: 1 cell = ${CELL_METERS} m  ·  plan ${GRID_W * CELL_METERS}×${GRID_H * CELL_METERS} m  ·  made with Airflow Simulator - by Jany Martelli @ Shambix.com`, W - 40, H - 30);
 
   // Download
   canvas.toBlob(blob => {
@@ -81,9 +83,4 @@ export function exportPNG(plan: Plan) {
     a.click();
     URL.revokeObjectURL(a.href);
   }, 'image/png');
-}
-
-export function dirName(deg: number): string {
-  const names = ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'];
-  return names[Math.round(((deg % 360) + 360) % 360 / 22.5) % 16];
 }
