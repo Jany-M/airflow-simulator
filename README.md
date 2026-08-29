@@ -82,21 +82,21 @@ Exterior openings act as **Dirichlet pressure boundaries** in the solve. Interio
 
 The steady incompressible potential-flow equation is solved on the cell network:
 
-\[
-\nabla \cdot (c \,\nabla p) = 0
-\]
+```math
+\nabla \cdot (c \nabla p) = 0
+```
 
-where \(p\) is relative pressure and \(c\) is face conductance (zero at walls and closed openings). Interior cells are unknowns; exterior opening faces are fixed to their wind pressure coefficient.
+where $p$ is relative pressure and $c$ is face conductance (zero at walls and closed openings). Interior cells are unknowns; exterior opening faces are fixed to their wind pressure coefficient.
 
-**Method:** Gauss–Seidel iteration with over-relaxation (\(\omega = 1.7\)) and early exit on convergence. Iteration counts are defined in `src/sim/constants.ts`: **420** live, **200** optimizer what-if, **900** PNG export.
+**Method:** Gauss–Seidel iteration with over-relaxation ($\omega = 1.7$) and early exit on convergence. Iteration counts are defined in `src/sim/constants.ts`: **420** live, **200** optimizer what-if, **900** PNG export.
 
 ### Flow field and dead zones
 
 Face velocity is proportional to conductance and the pressure difference across the face, scaled by wind speed for display:
 
-\[
-u \propto c \cdot \Delta p \cdot (6 \cdot v_\text{wind})
-\]
+```math
+u \propto c \cdot \Delta p \cdot (6 \cdot v_{\text{wind}})
+```
 
 Cell-centred speed is the average of adjacent face velocities. This is analogous to **Darcy-type flow** through resistive edges rather than a full momentum equation.
 
@@ -130,7 +130,7 @@ Each candidate configuration is evaluated by running the solver and computing a 
 | Overall coverage | × 10 | Total ventilated floor area |
 | Mean speed / total inflow | capped at 4 / 2 | Tie-breakers only — reduced so high throughput alone cannot win |
 | Corridor concentration | − × 20 | Penalises high mean speed when few rooms are reached |
-| Opening flux spread | − × 24 | Penalises lopsided inflow: \((f_\max - f_\min) / f_\max\) across active openings |
+| Opening flux spread | − × 24 | Penalises lopsided inflow: $(f_\max - f_\min) / f_\max$ across active openings |
 | Flux dominance | − × 35 | Penalises when one opening exceeds **~38 %** of total inflow |
 | Number of active openings | − 0.2 each | Slight preference for simpler configurations |
 
@@ -138,7 +138,7 @@ Each candidate configuration is evaluated by running the solver and computing a 
 
 | Free openings | Algorithm |
 |---------------|-----------|
-| ≤ 10 | **Exhaustive** enumeration of all \(2^n\) combinations |
+| ≤ 10 | **Exhaustive** enumeration of all $2^n$ combinations |
 | > 10 | **Backward elimination** starting from all open, then **forward refinement** |
 
 For larger plans, backward elimination is used because a greedy forward-only search cannot discover ventilation paths that require multiple openings to open together (e.g. a door *and* a window must both be open before a downstream room receives airflow). The algorithm closes openings one at a time as long as the score does not decrease, then re-opens any closed opening that strictly improves the result.
