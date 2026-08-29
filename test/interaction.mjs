@@ -1,11 +1,26 @@
-// Focused interaction test for select / move / toggle against the Vite dev server.
+// Focused interaction test: select / move / toggle against built dist (port 4173).
 import { chromium } from 'playwright';
-import { mkdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdirSync, readFileSync, existsSync } from 'node:fs';
+import { createServer } from 'node:http';
+import { join, extname } from 'node:path';
+import { syncCellMapper } from './helpers/coords.mjs';
 
-const BASE = process.env.APP_URL || 'http://localhost:5173/';
+const BASE = process.env.APP_URL || 'http://localhost:4173/';
 const OUT = join(process.cwd(), 'test', 'shots-interaction');
 mkdirSync(OUT, { recursive: true });
+const DIST = join(process.cwd(), 'dist');
+const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.svg': 'image/svg+xml' };
+let server = null;
+if (!process.env.APP_URL) {
+  server = createServer((req, res) => {
+    let p = join(DIST, req.url === '/' ? 'index.html' : req.url.split('?')[0]);
+    if (!existsSync(p)) p = join(DIST, 'index.html');
+    res.setHeader('Content-Type', MIME[extname(p)] ?? 'application/octet-stream');
+    res.end(readFileSync(p));
+  });
+  await new Promise(r => server.listen(4173, r));
+}
+
 
 const LS_PLAN = 'airflow-simulator:plan:v1';
 const LS_LEGACY = 'airflow-planner:plan:v1';
@@ -42,21 +57,22 @@ await page.waitForTimeout(600);
 
 const canvas = page.locator('canvas');
 const box = await canvas.boundingBox();
-const s = Math.min(box.width / 56, box.height / 36) * 0.95;
-const ox = box.x + (box.width - 56 * s) / 2;
-const oy = box.y + (box.height - 36 * s) / 2;
-const cell = (x, y) => ({ x: ox + x * s, y: oy + y * s });
-
 const readPlan = () => page.evaluate(k => {
   const raw = localStorage.getItem(k);
   return raw ? JSON.parse(raw) : null;
 }, LS_PLAN);
 
+let cell = syncCellMapper(box, await readPlan());
+const refreshCell = async () => {
+  const b = await canvas.boundingBox();
+  cell = syncCellMapper(b, await readPlan());
+};
+
 const selectedLabel = async () => {
-  const room = page.locator('.selection input').first();
-  if (await room.count()) return `room:${await room.inputValue()}`;
   const info = page.locator('.sel-info');
   if (await info.count()) return `opening:${(await info.textContent()).trim()}`;
+  const room = page.locator('.selection input[aria-label="Room name"]');
+  if (await room.count()) return `room:${await room.inputValue()}`;
   return 'none';
 };
 
@@ -86,24 +102,25 @@ check(
 // ── 2. Long-press same window → select (yellow ring) ──
 await page.mouse.move(closedWin.x, closedWin.y);
 await page.mouse.down();
-await page.waitForTimeout(250);
+await page.waitForTimeout(300);
 await page.mouse.up();
 await page.waitForTimeout(300);
 after = await readPlan();
-const stillOpen = after.openings.find(o => o.id === closedBefore.id);
+const southWin = after.openings.find(o => o.id === closedBefore.id);
 const sel2 = await selectedLabel();
 await page.screenshot({ path: join(OUT, '2-longpress-select.png') });
 check(
   'long-press selects opening without toggling',
-  sel2.startsWith('opening:') && stillOpen.open === true,
-  `open=${stillOpen.open} sel=${sel2}`,
+  sel2.startsWith('opening:') && southWin.open === true,
+  `open=${southWin.open} sel=${sel2}`,
 );
 
 // ── 3. Drag opening along wall (already selected from long-press) ──
-const openBefore = { ...stillOpen };
-await page.mouse.move(closedWin.x, closedWin.y);
+const openBefore = { ...southWin };
+const bodyPick = cell(14.25, 20); // fixture body, not centre glyph (glyph = resize)
+await page.mouse.move(bodyPick.x, bodyPick.y);
 await page.mouse.down();
-await page.mouse.move(cell(11, 20).x, cell(11, 20).y, { steps: 12 });
+await page.mouse.move(cell(16, 20).x, cell(16, 20).y, { steps: 12 });
 await page.mouse.up();
 await page.waitForTimeout(700);
 after = await readPlan();
@@ -146,6 +163,7 @@ check(
 );
 
 // ── 6. Resize still works on selected room wall (avoid openings on the wall) ──
+await refreshCell();
 before = await readPlan();
 const bed2 = before.rooms.find(r => r.name === 'Bedroom 2');
 const bed2c = cell(bed2.x + bed2.w / 2, bed2.y + bed2.h / 2);
@@ -155,7 +173,7 @@ await page.waitForTimeout(200);
 const eWall = cell(bed2.x + bed2.w, bed2.y + 1.5);
 await page.mouse.move(eWall.x, eWall.y);
 await page.mouse.down();
-await page.mouse.move(eWall.x + 2 * s, eWall.y, { steps: 8 });
+await page.mouse.move(eWall.x + 4 * cell(0, 0).s, eWall.y, { steps: 8 });
 await page.mouse.up();
 await page.waitForTimeout(700);
 after = await readPlan();
@@ -164,8 +182,17 @@ await page.screenshot({ path: join(OUT, '6-resize-room.png') });
 check('resize selected room wall', bed2r.w !== bed2.w, `w ${bed2.w}→${bed2r.w}`);
 
 // ── 7. Sidebar open/close still works ──
-await page.mouse.click(cell(8, 13.5).x, cell(8, 13.5).y); // living W window
-await page.waitForTimeout(250);
+await page.reload();
+await page.waitForSelector('canvas');
+await page.waitForTimeout(800);
+await refreshCell();
+const wPick = cell(8, 12.5);
+await page.mouse.move(wPick.x, wPick.y);
+await page.mouse.down();
+await page.waitForTimeout(300);
+await page.mouse.up();
+await page.waitForTimeout(300); // living W window
+await page.waitForTimeout(300);
 before = await readPlan();
 const wOpen = before.openings.find(o => o.orient === 'v' && o.x === 8 && o.y === 12);
 const wasOpen = wOpen.open;
@@ -181,5 +208,6 @@ console.log('\nCONSOLE_ERRORS:', errors.length ? errors : 'none');
 const failed = results.filter(r => !r.ok);
 console.log(`\n${results.length - failed.length}/${results.length} passed`);
 await context.close().catch(() => {});
+if (server) server.close();
 await browser.close().catch(() => {});
 process.exit(failed.length || errors.length ? 1 : 0);

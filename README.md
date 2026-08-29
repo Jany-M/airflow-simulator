@@ -2,26 +2,28 @@
 
 Interactive web app to **simulate natural cross-ventilation**. Draw rooms, place windows and doors, get live wind and weather conditions, watch particles flow, and find the optimal configuration that keeps air moving through the floorplan, lowering rooms temperature and humidity.
 
-How and why I built this: [From a Real Problem to a Working Web App](https://www.shambix.com/from-a-real-problem-to-a-working-web-app/)
+[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-shambinx-FFDD00?style=flat-square&logo=buy-me-a-coffee&logoColor=black)](https://www.buymeacoffee.com/shambinx)
+
+> How and why I built this: [From a Real Problem to a Working Web App](https://www.shambix.com/from-a-real-problem-to-a-working-web-app?utm_source=airflow-simulator&utm_medium=github)
 
 **Live App:** [airflowsimulator.netlify.app](https://airflowsimulator.netlify.app/)
 
 [![Netlify Status](https://api.netlify.com/api/v1/badges/ed135e10-b4bd-4683-ae2a-8d3e46ff95ac/deploy-status)](https://app.netlify.com/projects/airflowsimulator/deploys)
+
 
 <img width="1120" height="480" alt="AirFlowSimulator" src="https://github.com/user-attachments/assets/ee6b8112-4a8f-450f-956d-bf93949c2353" />
 
 
 ## Features
 
-- **Floor-plan editor** — grid rooms (1 cell = 0.5 m, plan 28×18 m), windows/doors on any wall, scale bar, W×L metre inputs, sample plan, erase/rename. Canvas frames and centers the building with minimal padding (scales with the window); on mobile also pinch-zoom / two-finger pan (Ctrl/Cmd+0 resets; mouse wheel zooms).
-- **Select & edit** — click room to select (yellow); drag interior to move, drag wall to resize. Click opening to open (**green**) / close (**red**); hold ~0.2 s to select (yellow ring) and drag along walls.
-- **Live airflow** — pressure-network solver + wind particles; dead zones tinted red.
-- **Best configuration** — searches open/closed sets so wind reaches as many rooms as possible (distributed cross-ventilation for the current wind).
-- **Weather** — [Open-Meteo](https://open-meteo.com) via geolocation or town search.
+- **Floor-plan editor** — grid rooms (1 cell = 0.5 m, plan 28×18 m), windows/doors on any wall, scale bar, W×L metre inputs, sample plan, erase/rename. Canvas frames the building with minimal padding. **Navigation:** click-drag empty canvas (outside rooms) to pan; middle-mouse or Space+drag anywhere; mouse wheel zoom; Shift+wheel pan; Ctrl/Cmd+0 resets; pinch-zoom and two-finger pan on touch. Room tool still draws on empty grid; other tools pan when not over a room or opening.
+- **Select & edit** — short click any door/window to open (**green**) / close (**red**); long press (~0.2 s) to select (yellow ring), then drag the body to move along the wall or the **centre dot** to resize. Click a room to select; drag interior to move, drag a wall to resize. New windows default to 3 cells (1.5 m), doors to 2 cells (1 m). Collapsible **Tools Help** in Floorplan lists all gestures.
+- **Live airflow** — pressure-network solver + wind particles; percentile heatmap; **hover any cell** for a live readout (airflow / temp / RH by view mode); per-opening inflow panel labelled by room and wall — click a row to select that opening on the plan. Animated wind arrows around the building on the live canvas.
+- **Best configuration** — searches open/closed sets so wind reaches as many rooms as possible with **even cross-ventilation** (not one corridor or window hogging inflow); result persists until you edit the plan (synced with live solver metrics). Help (?) explains the objective.
+- **Weather** — [Open-Meteo](https://open-meteo.com) via geolocation or manual town search (🔍 lens button beside **Use my current weather**; help (?) explains wrong-location on desktop tethering). Wind compass dial uses a visible grab-hand cursor on the dark UI.
 - **Climate views** — Airflow / Temp / Humidity based on live location; outdoor air advects through inlets; Environment baselines customizable in a collapsible panel.
-- **Sidebar** — Simulation → Wind & weather → Environment (collapsed) → Floorplan (collapsed) → Save & export.
+- **Sidebar** — **Floorplan** (center-view target, grid opacity, draw tools, **Tools Help**, selection) → **Simulation** (view mode, live toggle, optimizer, flux panel) → **Wind & weather** → **Environment** (collapsed) → **Save & export** (collapsed). Plan name row includes save (opens export) and reset-to-sample icons.
 - **Export** — PNG (streamlines, markers, legend) and JSON backup under **Save & export** (plans autosave to `localStorage` and export/import as JSON).
-
 
 <img width="1800" height="1300" alt="Sample_apartment_airflow" src="https://github.com/user-attachments/assets/21e86d50-83a9-45fb-b07b-c3efff17fbe8" />
 
@@ -31,10 +33,17 @@ How and why I built this: [From a Real Problem to a Working Web App](https://www
 npm install
 npm run dev      # http://localhost:5173
 npm run build    # type-check + dist/
-npm run preview
+npm run preview  # http://localhost:4173 (built dist)
 ```
 
-Fully static — open `dist/index.html` directly, or host `dist/` (Netlify: build `npm run build`, publish `dist`; `netlify.toml` included).
+## Tests
+
+```bash
+npm test               # build + unit (tsx) + e2e + interaction (static dist on :4173)
+npm run test:unit      # solver, climate, resize-openings (imports from src/)
+npm run test:e2e
+npm run test:interaction
+```
 
 ## Model & methods
 
@@ -55,7 +64,7 @@ The solver is **not** computational fluid dynamics (CFD): there is no Navier–S
 | Rooms | Axis-aligned rectangles of cells |
 | Openings | Doors and windows on cell edges (`h` or `v` orientation) |
 
-Interior cells that belong to any room are marked as *inside*. Adjacent inside cells are connected unless separated by a room boundary (wall). An **open** opening punches through that wall and assigns a face conductance: **1.0** for doors, **0.9** for windows. A **closed** opening leaves conductance at zero (impermeable wall).
+Interior cells that belong to any room are marked as *inside*. Adjacent inside cells are connected unless separated by a room boundary (wall). An **open** opening punches through that wall and assigns face conductance **scaled by opening span** (cells along the wall): base **1.0 × len** for doors, **0.9 × len** for windows. A **closed** opening leaves conductance at zero (impermeable wall).
 
 ### Wind boundary conditions
 
@@ -79,7 +88,7 @@ The steady incompressible potential-flow equation is solved on the cell network:
 
 where \(p\) is relative pressure and \(c\) is face conductance (zero at walls and closed openings). Interior cells are unknowns; exterior opening faces are fixed to their wind pressure coefficient.
 
-**Method:** Gauss–Seidel iteration with over-relaxation (\(\omega = 1.7\)). The live simulation uses 420 iterations per solve; the optimiser uses 200 for faster what-if evaluation.
+**Method:** Gauss–Seidel iteration with over-relaxation (\(\omega = 1.7\)) and early exit on convergence. Iteration counts are defined in `src/sim/constants.ts`: **420** live, **200** optimizer what-if, **900** PNG export.
 
 ### Flow field and dead zones
 
@@ -107,20 +116,22 @@ RH is mixed as a simple scalar, there is no psychrometric coupling, and temperat
 
 ### Best-configuration optimiser
 
-The optimiser searches over open/closed states of **unlocked** openings to maximise **distributed cross-ventilation** for the current wind direction. Locked openings are held fixed.
+The optimiser searches over open/closed states of **unlocked** openings to maximise **distributed cross-ventilation** for the current wind direction. Locked openings are held fixed. It avoids recommending “wind tunnel” setups where one or two openings carry most of the inflow while other rooms stay stagnant.
 
 #### Objective function
 
-Each candidate configuration is evaluated by running the solver and computing a composite **score** that prioritises:
+Each candidate configuration is evaluated by running the solver and computing a composite **score** (`scoreField` in `src/sim/solver.ts`) that prioritises:
 
 | Term | Weight | Intent |
 |------|--------|--------|
-| Rooms reached | × 50 | Fraction of rooms where ≥ 12 % of floor area exceeds the dead-zone threshold |
+| Rooms reached | × 50 | Fraction of rooms where **≥ 28 %** of floor area exceeds the dead-zone threshold (was 12 % in 1.1.x) |
+| Minimum room coverage | × 30 | Lifts the worst-performing room (weight increased from × 18) |
 | Room balance | × 22 | Mean per-room coverage — avoids one well-ventilated room masking dead neighbours |
-| Minimum room coverage | × 18 | Lifts the worst-performing room |
 | Overall coverage | × 10 | Total ventilated floor area |
-| Mean speed / total inflow | capped | Tie-breakers only |
+| Mean speed / total inflow | capped at 4 / 2 | Tie-breakers only — reduced so high throughput alone cannot win |
 | Corridor concentration | − × 20 | Penalises high mean speed when few rooms are reached |
+| Opening flux spread | − × 24 | Penalises lopsided inflow: \((f_\max - f_\min) / f_\max\) across active openings |
+| Flux dominance | − × 35 | Penalises when one opening exceeds **~38 %** of total inflow |
 | Number of active openings | − 0.2 each | Slight preference for simpler configurations |
 
 #### Search strategy
@@ -153,3 +164,5 @@ The objective and search strategy are **original**, they are not based on a publ
 - Full building energy or moisture physics
 
 Use the simulator to **compare strategies and identify dead zones**, not to size openings or predict measured air speeds.
+
+See [CHANGELOG.md](CHANGELOG.md) for release notes (current version **1.2.1**).

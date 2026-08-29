@@ -1,13 +1,17 @@
 {
   "name": "airflow-simulator",
   "private": true,
-  "version": "1.1.0",
+  "version": "1.2.1",
   "type": "module",
   "description": "Interactive natural cross-ventilation simulator: draw a floor plan, set the wind, and find the best windows/doors to open.",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:unit": "tsx test/solver.mjs && tsx test/climate.mjs && tsx test/resize-openings.mjs",
+    "test:e2e": "node test/e2e.mjs",
+    "test:interaction": "node test/interaction.mjs",
+    "test": "npm run build && npm run test:unit && npm run test:e2e && npm run test:interaction"
   },
   "dependencies": {
     "react": "^19.2.8",
@@ -19,6 +23,7 @@
     "@types/react-dom": "^19.2.4",
     "@vitejs/plugin-react": "^6.0.5",
     "playwright": "^1.62.1",
+    "tsx": "^4.20.5",
     "typescript": "^7.0.2",
     "vite": "^8.2.1"
   }
