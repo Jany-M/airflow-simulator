@@ -73,3 +73,72 @@ export function hitRoomWall(room: Room, wxp: number, wyp: number, tol = 0.45): S
   cands.sort((a, b) => a.d - b.d);
   return cands[0]?.side ?? null;
 }
+
+/** True if any pair of rooms overlap in their interiors. */
+export function planHasOverlaps(p: Plan): boolean {
+  for (let i = 0; i < p.rooms.length; i++) {
+    for (let j = i + 1; j < p.rooms.length; j++) {
+      if (rectsOverlap(p.rooms[i], p.rooms[j])) return true;
+    }
+  }
+  return false;
+}
+
+/** Non-destructive import helper: drop invalid openings only. */
+export function sanitizePlan(p: Plan): Plan {
+  return validateOpenings(p);
+}
+
+export function validateOpeningsWithNotice(p: Plan): { plan: Plan; dropped: number } {
+  const before = p.openings.length;
+  const plan = validateOpenings(p);
+  return { plan, dropped: before - plan.openings.length };
+}
+
+/** Which wall of this room the opening lies on. */
+export function openingRoomSide(room: Room, o: Opening): Side | null {
+  if (!onRoomBoundary(room, o)) return null;
+  if (o.orient === 'h') {
+    if (o.y === room.y) return 'n';
+    if (o.y === room.y + room.h) return 's';
+  } else {
+    if (o.x === room.x) return 'w';
+    if (o.x === room.x + room.w) return 'e';
+  }
+  return null;
+}
+
+const SIDE_WORD: Record<Side, string> = { n: 'north', s: 'south', e: 'east', w: 'west' };
+
+/** Human label for sidebar / flux readouts: room, wall, and kind. */
+export function openingLabel(plan: Plan, o: Opening): string {
+  const kind = o.kind === 'window' ? 'window' : 'door';
+  const rooms = plan.rooms.filter(r => openingRoomSide(r, o) != null);
+  if (rooms.length === 0) return `${kind} (${o.len} cells)`;
+  if (rooms.length === 1) {
+    const side = openingRoomSide(rooms[0], o)!;
+    return `${rooms[0].name} · ${SIDE_WORD[side]} ${kind}`;
+  }
+  const names = rooms.map(r => r.name);
+  return `${names[0]} ↔ ${names[1]} · ${kind}`;
+}
+
+/** Max length this opening can have at its current anchor on the wall. */
+export function openingWallSpan(plan: Plan, o: Opening): number {
+  let maxLen = 0;
+  for (const r of plan.rooms) {
+    if (!onRoomBoundary(r, o)) continue;
+    if (o.orient === 'h') maxLen = Math.max(maxLen, r.x + r.w - o.x);
+    else maxLen = Math.max(maxLen, r.y + r.h - o.y);
+  }
+  for (const other of plan.openings) {
+    if (other.id === o.id || other.orient !== o.orient) continue;
+    if (o.orient === 'h' && other.y === o.y && other.x > o.x) {
+      maxLen = Math.min(maxLen, other.x - o.x);
+    }
+    if (o.orient === 'v' && other.x === o.x && other.y > o.y) {
+      maxLen = Math.min(maxLen, other.y - o.y);
+    }
+  }
+  return Math.max(1, maxLen);
+}

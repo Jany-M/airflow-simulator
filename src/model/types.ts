@@ -26,7 +26,7 @@ export interface Opening {
   orient: Orient;
   x: number;   // edge coordinate (see header comment)
   y: number;
-  len: number; // span in cells along the wall (window: 2 = 1 m, door: 2 = 0.9 m)
+  len: number; // span in cells along the wall (default window 3 = 1.5 m, door 2 = 1 m)
   open: boolean;
   locked?: boolean; // excluded from the optimizer (kept as-is)
 }
@@ -85,3 +85,5 @@ export function windVector(w: Wind): { x: number; y: number } {
   // 0° = from North → blows toward south (+y). sin for x (east), -cos for y-up → +y down:
   return { x: Math.sin(rad), y: -Math.cos(rad) };
 }
+
+export { DEFAULT_WINDOW_LEN, DEFAULT_DOOR_LEN } from '../sim/constants';
