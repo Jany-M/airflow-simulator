@@ -1,18 +1,18 @@
 // ── Best-configuration search ──────────────────────────────────────────────
 // Finds which openings to open so wind flows THROUGH as many rooms as possible
-// (distributed cross-ventilation), not a strong breeze trapped in one room.
+// with even per-room coverage — not a strong breeze trapped in one corridor.
+// Score penalises lopsided opening inflow (one window hogging flux).
 // Exhaustive for small numbers of toggleable openings; greedy + local-search
 // refinement for larger plans. Runs in async chunks so the UI stays responsive.
 
 import { Plan, OptimizerResult } from '../model/types';
 import { solve, scoreField } from './solver';
-
-const OPT_ITERATIONS = 200; // coarser solve for what-if runs
+import { SOLVE_ITER_OPT } from './constants';
 
 function evaluate(plan: Plan, openIds: Set<string>): {
   score: number; coverage: number; meanSpeed: number; roomsReached: number;
 } {
-  const f = solve(plan, { iterations: OPT_ITERATIONS, openIds });
+  const f = solve(plan, { iterations: SOLVE_ITER_OPT, openIds });
   const s = scoreField(f, plan.wind.speed, plan.rooms);
   return { score: s.score, coverage: s.coverage, meanSpeed: s.meanSpeed, roomsReached: s.roomsReached };
 }

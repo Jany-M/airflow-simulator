@@ -18,6 +18,7 @@
 
 import { EnvConditions } from '../model/types';
 import { FlowField } from './solver';
+import { FIELD_DISPLAY_GAIN } from './constants';
 
 export class ClimateSystem {
   T!: Float32Array;
@@ -40,7 +41,7 @@ export class ClimateSystem {
       this.prevInside = null;
     }
     // Same display normalisation as the particles: fastest cell ≈ 7 cells/s.
-    this.gain = f.maxSpeed > 1e-5 ? 7 / f.maxSpeed : 0;
+    this.gain = f.maxSpeed > 1e-5 ? FIELD_DISPLAY_GAIN / f.maxSpeed : 0;
     // Newly-interior cells start at the indoor baseline; existing cells keep
     // their state so toggling a window doesn't reset the whole building.
     for (let i = 0; i < n; i++) {

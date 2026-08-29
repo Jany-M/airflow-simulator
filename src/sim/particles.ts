@@ -4,6 +4,7 @@
 // stagnant areas fade out — dead zones stay visibly still.
 
 import { FlowField, sampleVelocity } from './solver';
+import { FIELD_DISPLAY_GAIN, PARTICLE_SPAWN_PER_FRAME } from './constants';
 
 export interface Particle {
   x: number; y: number;
@@ -21,10 +22,9 @@ export class ParticleSystem {
 
   setField(f: FlowField | null) {
     this.field = f;
-    if (!f) { this.particles = []; return; }
-    // Normalise display speed: fastest point in the field moves ~7 cells/s
-    // regardless of absolute pressure numbers, so motion always reads well.
-    this.gain = f.maxSpeed > 1e-5 ? 7 / f.maxSpeed : 0;
+    this.particles = [];
+    if (!f) return;
+    this.gain = f.maxSpeed > 1e-5 ? FIELD_DISPLAY_GAIN / f.maxSpeed : 0;
   }
 
   step(dt: number) {
@@ -34,7 +34,7 @@ export class ParticleSystem {
     // Spawn at inlets proportional to flux.
     const totalFlux = f.inlets.reduce((s, i) => s + i.flux, 0);
     if (totalFlux > 1e-4 && this.particles.length < this.maxParticles) {
-      const spawnCount = Math.min(3, this.maxParticles - this.particles.length);
+      const spawnCount = Math.min(PARTICLE_SPAWN_PER_FRAME, this.maxParticles - this.particles.length);
       for (let k = 0; k < spawnCount; k++) {
         let r = Math.random() * totalFlux;
         let inlet = f.inlets[0];
@@ -56,10 +56,17 @@ export class ParticleSystem {
       const vel = sampleVelocity(f, p.x, p.y);
       const sp = Math.hypot(vel.x, vel.y);
       p.speed = sp;
-      // advect (gain normalises the field to a good visual pace)
       const step = Math.min(dt, 0.05);
-      p.x += vel.x * step * this.gain + (Math.random() - 0.5) * 0.02;
-      p.y += vel.y * step * this.gain + (Math.random() - 0.5) * 0.02;
+      const subSteps = 3;
+      const subDt = step / subSteps;
+      for (let si = 0; si < subSteps; si++) {
+        const v = sampleVelocity(f, p.x, p.y);
+        p.x += v.x * subDt * this.gain + (Math.random() - 0.5) * 0.008;
+        p.y += v.y * subDt * this.gain + (Math.random() - 0.5) * 0.008;
+        const ix = Math.floor(p.x), iy = Math.floor(p.y);
+        const insideSub = ix >= 0 && ix < f.nx && iy >= 0 && iy < f.ny && f.inside[iy * f.nx + ix];
+        if (!insideSub) break;
+      }
       p.age += dt;
 
       const ix = Math.floor(p.x), iy = Math.floor(p.y);

@@ -13,6 +13,7 @@
 // exits leeward — and it shows where flow dies (dead zones).
 
 import { GRID_W, GRID_H, Opening, Plan, Wind, windVector } from '../model/types';
+import { FIELD_VEL_GAIN, SOLVE_CONV_EPS, SOLVE_ITER_LIVE } from './constants';
 
 export interface FlowField {
   nx: number;
@@ -120,7 +121,8 @@ function buildFaces(plan: Plan, openings: Opening[], openSet: Set<string>, nx: n
   // Openings punch through walls. Exterior ones become pressure boundaries.
   openings.forEach((op, oi) => {
     if (!openSet.has(op.id)) return;
-    const cond = op.kind === 'door' ? 1.0 : 0.9;
+    const base = op.kind === 'door' ? 1.0 : 0.9;
+    const cond = base * Math.max(1, op.len);
     for (let i = 0; i < op.len; i++) {
       if (op.orient === 'v') {
         const x = op.x, y = op.y + i;
@@ -162,7 +164,7 @@ export interface SolveOptions {
 
 export function solve(plan: Plan, opts: SolveOptions = {}): FlowField {
   const nx = GRID_W, ny = GRID_H;
-  const iterations = opts.iterations ?? 420;
+  const iterations = opts.iterations ?? SOLVE_ITER_LIVE;
   const inside = rasterizeInside(plan, nx, ny);
   const openSet = opts.openIds ?? new Set(plan.openings.filter(o => o.open).map(o => o.id));
   const faces = buildFaces(plan, plan.openings, openSet, nx, ny, inside);
@@ -174,6 +176,7 @@ export function solve(plan: Plan, opts: SolveOptions = {}): FlowField {
   // ghost pressure; wall faces contribute nothing (pure Neumann).
   const omega = 1.7;
   for (let it = 0; it < iterations; it++) {
+    let maxDelta = 0;
     for (let y = 0; y < ny; y++) {
       const row = y * nx;
       for (let x = 0; x < nx; x++) {
@@ -198,16 +201,20 @@ export function solve(plan: Plan, opts: SolveOptions = {}): FlowField {
         if (c > 0) { const b = bv[f]; if (Number.isNaN(b)) { sum += c * p[i + nx]; } else { sum += c * b; } wsum += c; }
         if (wsum > 0) {
           const target = sum / wsum;
-          p[i] += omega * (target - p[i]);
+          const delta = omega * (target - p[i]);
+          p[i] += delta;
+          const ad = Math.abs(delta);
+          if (ad > maxDelta) maxDelta = ad;
         }
       }
     }
+    if (maxDelta < SOLVE_CONV_EPS) break;
   }
 
   // Face velocities from pressure gradients.
   const u = new Float32Array((nx + 1) * ny);
   const v = new Float32Array(nx * (ny + 1));
-  const gain = 6 * plan.wind.speed; // visual scaling of Δp → m/s-ish numbers
+  const gain = FIELD_VEL_GAIN * plan.wind.speed; // visual scaling of Δp → m/s-ish numbers
 
   for (let y = 0; y < ny; y++) {
     for (let x = 0; x <= nx; x++) {
@@ -351,7 +358,20 @@ export interface Score {
 export const DEAD_ZONE_SPEED = 0.08;
 
 /** A room counts as "reached" once this fraction of its floor is above the dead-zone threshold. */
-const ROOM_REACHED_COV = 0.12;
+export const ROOM_REACHED_COV = 0.28;
+
+/** How much one opening may dominate total inflow before penalty kicks in (0..1). */
+const FLUX_DOMINANCE_THRESH = 0.38;
+
+/** Penalise lopsided inflow: 0 when openings share load, →1 when one carries almost all flux. */
+function openingFluxSpread(f: FlowField): number {
+  const fluxes: number[] = [];
+  f.openingFlux.forEach(fl => { if (fl > 1e-5) fluxes.push(fl); });
+  if (fluxes.length < 2) return 0;
+  const max = Math.max(...fluxes);
+  const min = Math.min(...fluxes);
+  return max > 1e-5 ? (max - min) / max : 0;
+}
 
 export function scoreField(
   f: FlowField,
@@ -405,22 +425,30 @@ export function scoreField(
     }
   }
 
-  // Prefer configs that push air through as many rooms as possible:
-  //  1) roomsReached — most rooms get a usable breeze
-  //  2) roomBalance  — equal per-room coverage (not one big room)
-  //  3) minRoomCov   — lift the worst room (reduce dead rooms)
-  //  4) coverage     — overall floor area still matters, lightly
-  // Mean speed / throughflow only break ties. Penalise "hot corridor" setups
-  // where mean speed is high but few rooms are reached.
+  // Prefer configs that push air *through* the plan, not one wind tunnel:
+  //  1) roomsReached — most rooms get a real breeze (≥ ROOM_REACHED_COV of floor)
+  //  2) minRoomCov   — lift the worst room
+  //  3) roomBalance  — even per-room coverage
+  //  4) coverage     — overall ventilated area, lightly
+  // Penalise high mean speed / total inflow when rooms aren't reached evenly, and
+  // when one opening hogs inflow (short-circuit paths).
   const concentration = Math.max(0, Math.min(meanSpeed * 2, 1) - roomsReached);
+  let maxFlux = 0;
+  f.openingFlux.forEach(fl => { if (fl > maxFlux) maxFlux = fl; });
+  const fluxSpread = openingFluxSpread(f);
+  const fluxDominance = totalFlow > 1e-5
+    ? Math.max(0, maxFlux / totalFlow - FLUX_DOMINANCE_THRESH)
+    : 0;
   const score =
     roomsReached * 50
+    + minRoomCov * 30
     + roomBalance * 22
-    + minRoomCov * 18
     + coverage * 10
-    + Math.min(meanSpeed * 5, 8)
-    + Math.min(totalFlow, 6)
+    + Math.min(meanSpeed * 3, 4)
+    + Math.min(totalFlow, 2)
     - 0.2 * f.openingFlux.size
-    - concentration * 20;
+    - concentration * 20
+    - fluxSpread * 24
+    - fluxDominance * 35;
   return { score, coverage, meanSpeed, totalFlow, roomBalance, roomsReached };
 }
