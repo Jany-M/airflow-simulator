@@ -274,7 +274,7 @@ export default function Sidebar() {
           <p>natural cross-ventilation simulator</p>
           <p className="app-credit">
             by{' '}
-            <a href="https://www.shambix.com?utm_source=airflow-simulator&utm_medium=app" target="_blank" title="Custom web and mobile apps development">
+            <a href="https://www.shambix.com??utm_source=airflow-simulator&utm_medium=referral&utm_campaign=projects&utm_content=app-sidebar" target="_blank" title="Custom web and mobile apps development">
               Jany Martelli
             </a>
           </p>

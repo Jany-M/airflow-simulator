@@ -2,7 +2,7 @@
 
 Interactive web app to **simulate natural cross-ventilation**. Draw rooms, place windows and doors, get live wind and weather conditions, watch particles flow, and find the optimal configuration that keeps air moving through the floorplan, lowering rooms temperature and humidity.
 
-> How and why I built this: [From a Real Problem to a Working Web App](https://www.shambix.com/from-a-real-problem-to-a-working-web-app?utm_source=airflow-simulator&utm_medium=github)
+> How and why I built this: [From a Real Problem to a Working Web App](https://www.shambix.com/from-a-real-problem-to-a-working-web-app/?utm_source=airflow-simulator&utm_medium=referral&utm_campaign=projects&utm_content=github-readme)
 
 ## Support this Project if you like it
 
