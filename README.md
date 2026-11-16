@@ -6,10 +6,7 @@ Interactive web app to **simulate natural cross-ventilation**. Draw rooms, place
 
 ## Support this Project if you like it
 
-[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-shambix-FFDD00?style=flat-square&logo=buy-me-a-coffee&logoColor=black)](https://www.buymeacoffee.com/shambix)
-
-[![Sponsor this on GitHub](https://img.shields.io/github/sponsors/Jany-M?label=Sponsor&logo=githubsponsors&logoColor=white&color=EA4AAA)](https://github.com/sponsors/Jany-M)
-
+[![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-shambix-FFDD00?style=flat-square&logo=buy-me-a-coffee&logoColor=black)](https://www.buymeacoffee.com/shambix) or [![Sponsor this on GitHub](https://img.shields.io/github/sponsors/Jany-M?label=Sponsor&logo=githubsponsors&logoColor=white&color=EA4AAA)](https://github.com/sponsors/Jany-M)
 
 
 ## Check out the Live App
@@ -175,6 +172,10 @@ Use the simulator to **compare strategies and identify dead zones**, not to size
 
 See [CHANGELOG.md](CHANGELOG.md) for release notes (current version **1.2.1**).
 
+## Author
+
+Jany Martelli
+
 ## Need a custom web / mobile / cloud / AI app developed?
 
-See tech firm [Shambix!]([https://www.shambix.com](https://www.shambix.com/?utm_source=airflow-simulator&utm_medium=referral&utm_campaign=projects&utm_content=github-repo)) services or email [info@shambix.com](mailto:info@shambix.com).
+See tech firm [Shambix](https://www.shambix.com/?utm_source=airflow-simulator&utm_medium=referral&utm_campaign=projects&utm_content=github-readme) services or email [info@shambix.com](mailto:info@shambix.com).
