@@ -177,4 +177,4 @@ See [CHANGELOG.md](CHANGELOG.md) for release notes (current version **1.2.1**).
 
 ## Need a custom web / mobile / cloud / AI app developed?
 
-[Get in touch!](https://www.shambix.com) or email [info@shambix.com](mailto:info@shambix.com) .
+See tech firm [Shambix!]([https://www.shambix.com](https://www.shambix.com/?utm_source=airflow-simulator&utm_medium=referral&utm_campaign=projects&utm_content=github-repo)) services or email [info@shambix.com](mailto:info@shambix.com).
